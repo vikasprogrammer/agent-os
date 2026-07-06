@@ -34,8 +34,10 @@ running such a script, or you will pollute live data.
   restart: `curl -XPOST localhost:3010/api/<route> -d '{"session":"nope"}'` should give **404**
   (route present), not 401. (Prod Linux: `sudo systemctl restart agent-os`. **This Mac Mini** — the
   `instapods` tenant runs under launchd as `com.agentos.instapods` (`~/Library/LaunchAgents/com.agentos.instapods.plist`,
-  KeepAlive, `./data` on :3010, fronted by `tailscale serve` http→3010): rebuild + bounce with
-  `npm run build && launchctl kickstart -k gui/$(id -u)/com.agentos.instapods`; logs at `data/server.log`;
+  KeepAlive, home `~/agent-os-data/instapods` (kept OUTSIDE the repo checkout so a spawned agent's
+  parent-dir CLAUDE.md walk can't pick up this repo's own CLAUDE.md; new tenants go alongside as
+  `~/agent-os-data/<slug>`), on :3010, fronted by `tailscale serve` http→3010): rebuild + bounce with
+  `npm run build && launchctl kickstart -k gui/$(id -u)/com.agentos.instapods`; logs at `~/agent-os-data/instapods/server.log`;
   load/unload with `launchctl load -w|unload <plist>`.)
 - **Agent-facing MCP tools (`src/memory/memory-mcp.ts` — `recall`/`remember`/`revise`/`forget`, the
   `kb_*` tools, `ask`/`check_inbox`/`report`/`update`/`publish`/`artifacts_list`, `schedule`/`unschedule`,

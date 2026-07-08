@@ -1,10 +1,25 @@
 # Agent library — a browsable catalog of importable agents
 
-**Status:** **Proposed** (Phase 0 — not started). The pattern this spec asks for already ships twice,
-for *skills*: a **local bundled catalog** (`config/skills` → Settings → Skills → Install) and a
-**remote GitHub registry** (`src/edge/skill-registry.ts` — `npx skills add owner/repo` / skills.sh).
-Agents have neither. This plan mirrors both mechanisms for agents, and — as the migration that proves
-them out — moves today's *hardcoded* built-in agents into the catalog as data.
+**Status:** **Phase 1 shipped** (v0.49.0). The pattern this spec mirrors already ships for *skills*: a
+**local bundled catalog** (`config/skills` → Settings → Skills → Install). The agent library is the
+agent-side twin of it — a **distribution-only** catalog: the entries are fixed by what ships in
+`config/agents/`, an owner installs *from* it, and (per the ratified scope) users cannot add to it. A
+one-off agent still arrives via the existing bundle importer.
+
+**What shipped:** the catalog module `src/edge/agent-catalog.ts` (`readAgentCatalog` / `installAgentFromCatalog`
+/ `seedBuiltinAgents` + `BUILTIN_SEED_IDS`); the console routes `GET /api/agents/catalog` +
+`POST /api/agents/catalog/:id/install` (`src/server.ts`, owner/admin, audited `agent.installed`); the
+**Agent library** collapsible section on the Agents page (`web/src/App.tsx`, mirroring `SkillCatalog`);
+and the migration that proves it out — the five built-in agents (`agent-author`, `engineer`, `support`,
+`marketer`, `researcher`) moved out of the hardcoded `src/edge/generalists.ts` / `src/edge/agent-author.ts`
+(both deleted) into `config/agents/<id>/{agent.json,CLAUDE.md}` as catalog data, plus two install-on-demand
+library agents (`sales`, `ops`) so the library has something to actually import. Boot now seeds the
+built-in fleet from the catalog (`seedBuiltinAgents`) and no longer auto-registers catalog entries into
+the live fleet (`kernel.ts`).
+
+**Cut (per the distribution-only decision):** the remote GitHub registry (an `agent-registry.ts` clone of
+`skill-registry.ts` that would let users install agents from arbitrary repos). The library is what we
+ship, full stop. Marketplace-format export + an A2A card remain possible future interop work.
 
 ## The gap
 
@@ -64,32 +79,23 @@ and treat marketplace-format as an **export/interop** target, not the source of 
 entry is just a bundle folder that lives in the software instead of a zip:
 
 ```
-config/agents/                         # the software's read-only agent catalog
-  library.json                         # registry index (the marketplace.json analogue)
+config/agents/                         # the software's agent catalog (paths.bundledAgents)
   engineer/
     agent.json                         # manifest (id, description, category, icon, budget, model?…)
     CLAUDE.md                          # system prompt
-    memory.jsonl                       # optional — seed memories (one JSON fact per line)
-    skills/<name>/SKILL.md             # optional — bundled procedures
-    knowledge/<section>/<slug>.md      # optional — seed KB pages
-  support/ …  marketer/ …  researcher/ …  agent-author/ …
+    memory.jsonl                       # optional — seed memories (one JSON fact per line) [future]
+    skills/<name>/SKILL.md             # optional — bundled procedures [future]
+    knowledge/<section>/<slug>.md      # optional — seed KB pages [future]
+  support/ marketer/ researcher/ agent-author/   # seeded built-ins
+  sales/ ops/                          # install-on-demand library agents
 ```
 
-`library.json` is the browse index — one entry per agent, mirroring `marketplace.json`/`CatalogSkill`:
-
-```json
-{
-  "name": "agent-os built-ins",
-  "version": "1.0.0",
-  "agents": [
-    { "id": "engineer",  "category": "Engineering", "description": "…", "icon": "Code2",
-      "keywords": ["code","debug","review"], "source": "./engineer" }
-  ]
-}
-```
-
-(It can be *generated* from the folders at build time so a catalog author never hand-syncs it — same
-trick the wshobson marketplace uses.)
+**No index file.** The catalog is derived directly by scanning the folders (`readAgentCatalog` reads each
+`<id>/agent.json`) — there's no `library.json`/`marketplace.json` to hand-sync (the "generated vs authored"
+decision, resolved in favour of neither: derive it live, like the skills catalog does). The five built-in
+folders carry only `agent.json` + `CLAUDE.md` today; `installAgentFromCatalog` deep-copies the whole
+folder, so richer bundle content (`memory.jsonl` replay, `skills/`, `knowledge/`) is a documented future
+add — the one-off bundle importer already handles those for a rich agent.
 
 ## The migration — built-ins become catalog data
 
@@ -97,35 +103,36 @@ This is the change that proves the catalog and deletes prompt strings from the c
 
 1. **Author `config/agents/<id>/`** for `engineer`, `support`, `marketer`, `researcher`, `agent-author`
    — `agent.json` + `CLAUDE.md` lifted verbatim out of `generalists.ts` / `agent-author.ts`.
-2. **Reduce `ensureGeneralists`/`ensureAgentAuthor` to a catalog seed.** They keep their *contract* —
-   "a fresh home boots with these five, idempotently, and user edits survive" — but the source of truth
-   moves from string literals to `config/agents/<id>/`. Implementation becomes: on boot, for each
-   **seed** id not already present in `<home>/agents/`, `installFromCatalog(id)`. (Keep the code entry
-   points so callers/tests don't churn; they just delegate.)
-3. **Net effect:** the same five agents ship, but now they are (a) editable data, (b) the first rows of
-   a browsable catalog, and (c) removable/re-installable from the console like any other library agent.
-   Prompts stop being TypeScript.
+2. **Replace `ensureGeneralists`/`ensureAgentAuthor` with `seedBuiltinAgents`.** It keeps their *contract* —
+   "a fresh home boots with the built-in fleet, idempotently, user edits survive, a deleted one is
+   restored on the next boot" — but the source of truth moves from string literals to `config/agents/<id>/`:
+   on boot, for each `BUILTIN_SEED_ID` whose `<home>/agents/<id>/` folder is absent, deep-copy it out of the
+   catalog. The two old files (`generalists.ts`, `agent-author.ts`) are **deleted**.
+3. **Net effect:** the same five agents ship, but now they are (a) editable data, (b) rows of a browsable
+   catalog, and (c) removable/re-installable from the console like any other library agent. Prompts stop
+   being TypeScript.
 
-> Decision to make: is the built-in fleet **auto-seeded** on first boot (today's behaviour — a fresh
-> home is useful immediately) or **install-on-demand** from the catalog (empty home, operator picks)?
-> Recommend: keep auto-seed for the five built-ins (preserve the "useful the moment it boots" promise);
-> everything *else* in the catalog is install-on-demand.
+> **Resolved — auto-seed vs install-on-demand:** the five built-ins are **auto-seeded** (preserve "useful
+> the moment it boots"); everything *else* in the catalog (`sales`, `ops`, and future entries) is
+> **install-on-demand**. To make that split real, boot no longer auto-registers `config/agents/` entries
+> into the live fleet (the old `loadAgentsFrom(paths.bundledAgents)` is removed, and `rescanAgents` scans
+> the data home only) — a catalog agent reaches the fleet only by being seeded or installed.
 
 ## Surface area
 
-**Store** — `AgentStore` (or extend the kernel's agent registry) gains, mirroring `SkillsStore`:
-- `catalog(): CatalogAgent[]` — read `config/agents/*/agent.json` (+ `library.json`), each flagged
-  `installed` (does `<home>/agents/<id>/` exist?). `CatalogAgent` ≈ `CatalogSkill` (id, description,
-  category, icon, keywords, installed).
-- `installFromCatalog(id): AgentManifest` — deep-copy the catalog folder into `<home>/agents/<id>/`,
-  then run it through the **same** sanitize/replay path as bundle import (skills, memories, knowledge),
-  register live, audit `agent.installed { source: 'catalog' }`.
+**Catalog module** — `src/edge/agent-catalog.ts` (not a new store class — agents are kernel-managed):
+- `readAgentCatalog(catalogDir, userAgentsDir): CatalogAgent[]` — scan `config/agents/*/agent.json`, each
+  flagged `installed` (does `<home>/agents/<id>/` exist?) and `builtin` (is it a seed id). `CatalogAgent` ≈
+  `CatalogSkill` (id, description, category, icon, model, effort, examplePrompts, installed, builtin).
+- `installAgentFromCatalog(catalogDir, userAgentsDir, id): AgentManifest` — deep-copy the catalog folder
+  into `<home>/agents/<id>/` (throws if it already exists) and return the manifest tagged with its home
+  dir; the route registers it live + audits `agent.installed { source: 'catalog' }`. Catalog agents are
+  trusted software, so the manifest is copied as-is (no re-sanitize — that guards the *untrusted* bundle
+  path).
+- `seedBuiltinAgents(os)` — the boot seed; `BUILTIN_SEED_IDS` = the five.
 
-**Remote registry** — `src/edge/agent-registry.ts`, a near-clone of `skill-registry.ts`: list a public
-repo via the trees API, detect installable agents (`agent.json` present), fetch bytes from
-`raw.githubusercontent.com`, hand each folder to `parseBundle()` → the import path. Owner/admin only,
-file-count/size capped, `PRESET_SOURCES` for a curated featured set. Audit `agent.installed { source:
-'github:<repo>' }`.
+**Remote registry — cut.** Per the distribution-only decision there is no `agent-registry.ts`; the library
+is exactly what ships in `config/agents/`.
 
 **Routes** (copy the skills-catalog routes, agent nouns):
 - `GET  /api/agents/catalog` — the bundled catalog (owner/admin).
@@ -151,41 +158,38 @@ the story to lead with, and the sanitize path in `bundle-import.ts` is its first
 
 ## Phasing
 
-- **Phase 1 — bundled catalog + migration (this doc's core).** `config/agents/` catalog, `AgentStore.catalog()`/
-  `installFromCatalog()`, the two catalog routes, the Agent Library console view, and the five built-ins
-  moved out of TypeScript into `config/agents/`. Self-contained, no new external surface, ships the whole
-  "browse & import built-ins" experience.
-- **Phase 2 — remote registry.** `agent-registry.ts` + `PRESET_SOURCES` + the "From GitHub" install lane.
-  Reuses Phase 1's import path end-to-end; the only new code is repo listing/fetch (a clone of
-  `skill-registry.ts`).
-- **Phase 3 — interop & publish.** Marketplace-format **export** (`marketplace.json` + `plugins/`) and an
-  A2A `/.well-known/agent-card.json` so an agent-os library is discoverable/consumable by the wider
-  ecosystem; a **publish-with-scan** flow (the governed-library differentiator) that runs the security
-  checklist before an agent is offered for install.
+- **Phase 1 — bundled catalog + migration (shipped, v0.49.0).** `config/agents/` catalog, the
+  `agent-catalog.ts` module, the two catalog routes, the Agent library console section, and the five
+  built-ins moved out of TypeScript into `config/agents/` (+ `sales`/`ops` install-on-demand). Self-contained,
+  no new external surface.
+- **Phase 2 — remote registry: CUT.** The distribution-only scope means no install-from-arbitrary-repo
+  lane. (If that scope ever changes, an `agent-registry.ts` clone of `skill-registry.ts` reusing the same
+  install path is the shape.)
+- **Phase 3 — interop & richer entries (future).** Marketplace-format **export** (`marketplace.json` +
+  `plugins/`) and an A2A `/.well-known/agent-card.json` for external discovery; catalog entries that carry
+  `memory.jsonl` / `skills/` / `knowledge/` and replay them on install (extract the bundle-import route's
+  replay path so both lanes share it); optionally a `publish-with-scan` flow for a "verified" badge.
 
-## Open decisions
+## Decisions (resolved)
 
-1. **Format allegiance** — keep the agent-os bundle canonical + offer marketplace export (recommended:
-   preserves budget/policy/principal the plugin format can't hold), or adopt `plugin.json`/`marketplace.json`
-   as the on-disk truth (loses governance fields).
-2. **Auto-seed vs install-on-demand** for the built-in five (recommended: auto-seed the five, on-demand
-   for the rest — see the migration note).
-3. **`library.json`: authored or generated** from the folders at build time (recommended: generated —
-   no hand-sync).
-4. **Registry trust** — do remote-installed agents require the Phase 3 scan before they can run, or is
-   the existing sanitize path enough for Phase 2? (Recommended: sanitize is the Phase 2 floor; scan is a
-   Phase 3 gate for a "verified" badge, not a hard block.)
+1. **Format allegiance** — the agent-os bundle stays canonical (preserves budget/policy/principal the
+   plugin format can't hold); marketplace-format export is a future interop target, not the source of truth.
+2. **Auto-seed vs install-on-demand** — auto-seed the five built-ins; everything else install-on-demand.
+3. **Index file** — none; the catalog is derived live by scanning the folders (no `library.json` to sync).
+4. **Trust** — the library is distribution-only (trusted software), so catalog installs copy the manifest
+   as-is; the re-sanitize path stays reserved for the untrusted one-off bundle importer.
 
 ## Touch points (reference)
 
-| Concern | Skills (exists) | Agents (to build) |
+| Concern | Skills (exists) | Agents (shipped) |
 |---|---|---|
-| Bundled catalog dir | `config/skills` (`home.ts:87` `bundledSkills`) | `config/agents` (`home.ts:86` `bundledAgents`, today empty) |
-| Catalog store methods | `SkillsStore.catalog()`/`install()` (`skills.ts:234,251`) | `AgentStore.catalog()`/`installFromCatalog()` |
-| Catalog routes | `GET /api/skills/catalog`, `POST …/catalog/:name/install` (`server.ts:2266,2270`) | `GET /api/agents/catalog`, `POST …/catalog/:id/install` |
-| Remote registry | `src/edge/skill-registry.ts` (GitHub trees API, `PRESET_SOURCES`) | `src/edge/agent-registry.ts` (clone) |
-| One-off import | — | `parseBundle()` + `POST /api/agents/import` (`bundle-import.ts`, exists — reused) |
-| Built-in provisioning | n/a | `ensureGeneralists`/`ensureAgentAuthor` (`kernel.ts:303-304`) → thin catalog seed |
+| Bundled catalog dir | `config/skills` (`home.ts:87` `bundledSkills`) | `config/agents` (`home.ts:86` `bundledAgents`) |
+| Catalog logic | `SkillsStore.catalog()`/`install()` (`skills.ts:234,251`) | `agent-catalog.ts` `readAgentCatalog`/`installAgentFromCatalog` |
+| Catalog routes | `GET /api/skills/catalog`, `POST …/catalog/:name/install` (`server.ts:2266,2270`) | `GET /api/agents/catalog`, `POST /api/agents/catalog/:id/install` |
+| Remote registry | `src/edge/skill-registry.ts` (GitHub trees API, `PRESET_SOURCES`) | cut (distribution-only) |
+| One-off import | — | `parseBundle()` + `POST /api/agents/import` (`bundle-import.ts`, reused) |
+| Built-in provisioning | n/a | `seedBuiltinAgents` (`agent-catalog.ts`, called from `kernel.ts`) |
+| Console UI | `SkillCatalog` section (Skills page) | `AgentLibrary` section (Agents page, `web/src/App.tsx`) |
 | Manifest schema | `SKILL.md` frontmatter | `AgentManifest` (`types.ts:667-698`) |
 
 See also `docs/procedural-skills-plan.md` (the skills-distribution patterns this mirrors) and

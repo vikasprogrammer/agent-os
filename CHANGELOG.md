@@ -8,12 +8,21 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
-## [0.52.1] — 2026-07-08
+## [0.53.1] — 2026-07-08
 ### Changed
 - **The agent library moved behind a button.** The Agents page no longer shows the library as an
   always-present section up top — it's now a **Library** button in the page's toolbar (and in the
   empty-state actions) that opens the catalog in a modal. Same install flow; less clutter on the
   primary "run an agent" surface.
+
+## [0.53.0] — 2026-07-08
+### Added
+- **Filter the sessions list by owner.** The Sessions filter bar gained an **Owner** dropdown that
+  narrows to the member a run acts as (run-as identity) — so you can see just your own sessions, or
+  everything a given teammate's automations/tasks/chats spawned. Options are the distinct owners
+  present (shown by name), and the dropdown only appears when more than one owner exists. Backed by a
+  new `runAsLabel` on the session API (the run-as member's display name), which the search box now
+  matches too.
 
 ## [0.52.0] — 2026-07-08
 ### Added

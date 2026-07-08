@@ -8,7 +8,7 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
-## [0.49.0] — 2026-07-08
+## [0.51.0] — 2026-07-08
 ### Added
 - **An agent library you install from — and the built-in fleet is now data, not code.** A workspace
   ships with a browsable catalog of ready-made agents (`config/agents/`), the agent-side twin of the
@@ -29,6 +29,27 @@ new version heading in the same commit.
   scans the data home only.
 ### Docs
 - Plan for the agent library — `docs/agent-library-plan.md` (Phase 1 shipped).
+
+## [0.50.0] — 2026-07-08
+### Added
+- **Filter the sessions list.** The Sessions page gained a filter bar — a free-text search (over
+  title / agent / id / task / started-by) plus three dropdowns: **status** (All / Live / Done /
+  Stopped / Crashed), **agent** (auto-derived from the sessions present), and **source** (Member /
+  Automation / Task / Chat, read from each run's provenance). Filters apply client-side over the
+  already-fetched list; the count reads "N of M sessions" while narrowed, a **Clear filters** button
+  and a "no matches" empty state appear, and select-all / bulk stop+delete now act on the filtered
+  view so a hidden row is never touched.
+
+## [0.49.0] — 2026-07-08
+### Added
+- **Duplicate an installed skill.** Each skill in the library (Skills page) now has a **Duplicate**
+  action next to Edit/Delete: it deep-copies the skill's folder (SKILL.md + any supporting files)
+  under a new name, strips the managed/proposed markers, and rewrites the copy's frontmatter `name:`
+  so it lists and invokes as `/newName`. Handy for forking a bundled or installed playbook before
+  tweaking it. Assignments are **not** carried over — a copy defaults to all agents, like a fresh
+  install. Owner/admin only; audited `skill.duplicated`. New store method `SkillsStore.duplicate` +
+  route `POST /api/skills/:name/duplicate`.
+### Docs
 - Embed an architecture diagram at the top of `docs/ARCHITECTURE.md`.
 
 ## [0.48.0] — 2026-07-08

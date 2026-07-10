@@ -8,6 +8,17 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
+## [0.84.0] — 2026-07-10
+### Added
+- **Bundled skill: `glm-review`** — a fast, one-shot **cross-model** code review using z.ai's GLM
+  models via their Anthropic-compatible API. Self-contained (`SKILL.md` + `glm-review.sh`, needs only
+  `curl`/`jq` and a `ZAI_API_KEY` env var; `gh` for `--pr`). Reviews the current repo's diff
+  (uncommitted / `--staged` / `--base <branch>` / `--pr <N>`), prints concrete bugs / security /
+  edge-cases / simplifications most-severe-first, and is description-triggered ("review with GLM", or
+  before opening/merging a PR). An independent second opinion alongside the host's own review. No
+  behavioural change to the platform — it only reads a diff and calls an API; any resulting change is
+  still governed by the gateway.
+
 ## [0.83.0] — 2026-07-10
 ### Added
 - **Scheduler concurrency cap `AOS_MAX_CONCURRENT_SESSIONS` (#137).** Defense-in-depth against the

@@ -402,6 +402,32 @@ export interface AddConnectorReq {
   scope?: ConnectorScope
 }
 
+// ── Host connections (the "Host" shape — docs/host-connections-plan.md, Phase 2a) ──
+export type HostProtocol = 'ssh' | 'http' | 'postgres' | 'any'
+export type HostPosture = 'allow' | 'ask' | 'never'
+export interface Host {
+  id: string
+  name: string
+  match: string                 // hostname glob | CIDR | host[:port]
+  protocol: HostProtocol
+  credential: string            // redacted: a `secret:KEY` ref, '••••' (raw, masked), or ''
+  posture: HostPosture
+  enabled: boolean
+  scope: ConnectorScope         // org | personal (same ownership model as connectors)
+  ownerMemberId?: string
+  shared: boolean
+  createdAt: number
+}
+export interface HostsResp { hosts: Host[] }
+export interface AddHostReq {
+  name: string
+  match: string
+  protocol?: HostProtocol
+  credential?: string
+  posture?: HostPosture
+  scope?: ConnectorScope
+}
+
 export interface MemoryRecord {
   id: string
   tenant: string
@@ -549,6 +575,19 @@ export interface CompanySettings {
   updatedAt?: number
   updatedBy?: string
   error?: string
+}
+
+/** Per-tenant web-console branding — accent colour + favicon badge. Display-only. */
+export interface Branding {
+  /** Accent colour as `#rrggbb`; empty/undefined → default theme. */
+  accentColor?: string
+  /** Favicon badge: an emoji or a 1–3 char initial; undefined → tenant initial. */
+  badge?: string
+}
+/** The public GET /api/branding payload (served unauthenticated so the login screen themes too). */
+export interface PublicBranding extends Branding {
+  tenant: string
+  tenantName?: string
 }
 
 /** A stored secret's identity + provenance — the value is NEVER returned by the API. */
@@ -699,6 +738,8 @@ export const api = {
   messages: () => call<Msg[]>('GET', '/api/messages'),
   run: (agent: string, task: string) => call<{ id: string; tmux: string; error?: string }>('POST', '/api/sessions', { agent, task }),
   stopSession: (id: string) => call<{ ok: boolean; error?: string }>('POST', `/api/sessions/${id}/stop`),
+  /** Lift the stop-block so a stopped session resurrects (claude --resume) on the next terminal open. */
+  resumeSession: (id: string) => call<{ ok: boolean; error?: string }>('POST', `/api/sessions/${id}/resume`),
   deleteSession: (id: string) => call<{ ok: boolean; error?: string }>('DELETE', '/api/sessions/' + id),
   attach: (id: string) => call<{ url?: string; error?: string }>('GET', `/api/sessions/${id}/attach`),
   sessionTranscript: (id: string) => call<{ text?: string; error?: string }>('GET', `/api/sessions/${id}/transcript`),
@@ -802,6 +843,10 @@ export const api = {
   governance: () => call<GovernanceThresholds & { updatedAt?: number; updatedBy?: string; error?: string }>('GET', '/api/settings/governance'),
   saveGovernance: (t: GovernanceThresholds) => call<{ ok: boolean; error?: string } & GovernanceThresholds>('PUT', '/api/settings/governance', t),
 
+  // Per-tenant console branding (accent colour + favicon badge).
+  branding: () => call<Branding & { updatedAt?: number; updatedBy?: string; error?: string }>('GET', '/api/settings/branding'),
+  saveBranding: (b: Branding) => call<{ ok: boolean; error?: string } & Branding>('PUT', '/api/settings/branding', b),
+
   // Secrets vault — metadata only on the way out; values only ever travel inbound.
   secrets: () => call<{ secrets: SecretMeta[]; error?: string }>('GET', '/api/secrets'),
   setSecret: (key: string, value: string, principal?: string) => call<{ ok: boolean; error?: string }>('POST', '/api/secrets', { key, value, principal }),
@@ -901,4 +946,11 @@ export const api = {
   deleteConnector: (id: string) => call<{ ok: boolean }>('DELETE', '/api/connectors/' + id),
   toggleConnector: (id: string, enabled: boolean) => call<Connector>('PATCH', '/api/connectors/' + id, { enabled }),
   shareConnector: (id: string, shared: boolean) => call<Connector>('PATCH', '/api/connectors/' + id, { shared }),
+
+  hosts: () => call<HostsResp>('GET', '/api/hosts'),
+  addHost: (h: AddHostReq) => call<Host | { error: string }>('POST', '/api/hosts', h),
+  updateHost: (id: string, patch: Partial<AddHostReq>) => call<Host | { error: string }>('PATCH', '/api/hosts/' + id, patch),
+  toggleHost: (id: string, enabled: boolean) => call<Host>('PATCH', '/api/hosts/' + id, { enabled }),
+  shareHost: (id: string, shared: boolean) => call<Host>('PATCH', '/api/hosts/' + id, { shared }),
+  deleteHost: (id: string) => call<{ ok: boolean }>('DELETE', '/api/hosts/' + id),
 }

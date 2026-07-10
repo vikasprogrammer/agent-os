@@ -12,6 +12,8 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, EFFORTS, PERMISSION_MODES, type PermissionMode, type StateResp, type AgentInfo, type Session, type Msg, type Member, type Role, type TeamResp, type MemberIdentity, type IdentityProvider, IDENTITY_PROVIDERS, type Automation, type Task, type TaskEvent, type TaskStatus, type AddTaskReq, type MemoryRecord, type MemoryHealth, type MemoryBackend, type MemorySettings, type MemorySettingsReq, type OllamaStatus, type KbPage, type KbRevision, type AgentRevision, type Recommendation, type PolicyDocument, type PolicyRule, type PolicyOutcome, type PolicyOp, type DirListing, type FileEntry, type FileContent, type Artifact, type SkillSummary, type SkillsResp, type CatalogSkill, type CatalogAgent, type SkillSource, type RemoteSkill, type SkillshHit, type IntegrationsResp, type SlackStatus, type DiscordStatus, type AuditEvent, type Effort, type RuntimeTuning, type SecretMeta, type UpdateStatus, type UpdateApplyResult, type ActivityEvent, type ActivitySummaryRow } from '@/lib/api'
+import { type Branding, type PublicBranding } from '@/lib/api'
+import { applyAccent, applyFavicon, faviconDataUri, readableOn } from '@/lib/branding'
 import { ConnectorsPage } from '@/connectors'
 import { docPages } from '@/docs'
 import { Xterm } from './Xterm'
@@ -49,6 +51,14 @@ const statusLabel = (s: Session): string => (isLive(s) && s.status !== 'running'
  *  as a Resume affordance. Requires a persisted launch env (`resumable`) and no live pane — a live
  *  session is just "open", not "resume". */
 const canResume = (s: Session): boolean => Boolean(s.resumable) && !isLive(s)
+
+/** Resume a stopped session from the console: lift the server-side stop-block, THEN open/focus its
+ *  terminal. A plain stop leaves the block in place so ttyd's silent auto-reconnect can't revive the
+ *  session; a Resume click is the deliberate act that clears it. We clear it explicitly (not just via
+ *  the iframe's attach fetch) because the tab may already be open and not remount. */
+const resumeAndOpen = (s: Session, onOpen: (tmux: string, title: string) => void): void => {
+  void api.resumeSession(s.id).finally(() => onOpen(s.tmux, s.agent + ' · ' + s.id))
+}
 
 /** Coarse provenance category of a session, from its raw `spawnedBy` (`automation:`/`task:`/`chat:`
  *  prefixes, else a member started it directly). Drives the Source filter on the sessions list. */
@@ -341,12 +351,25 @@ function useHashRoute(): { route: Route; detail: string; query: string; nav: (r:
 export default function App() {
   // undefined = checking, null = not logged in (show Login), Member = authed.
   const [me, setMe] = useState<Member | null | undefined>(undefined)
+  const [accent, setAccent] = useState<string | undefined>(undefined)
   useEffect(() => {
     api.me().then(setMe)
   }, [])
+  // Per-tenant branding — fetched from the PUBLIC endpoint so it themes the login screen + tab favicon
+  // before any session exists. Runs once on mount, independent of auth.
+  useEffect(() => {
+    fetch('/api/branding')
+      .then((r) => r.json() as Promise<PublicBranding>)
+      .then((b) => {
+        applyAccent(b.accentColor)
+        applyFavicon(faviconDataUri(b.accentColor, b.badge, b.tenantName))
+        setAccent(b.accentColor)
+      })
+      .catch(() => {})
+  }, [])
 
   if (me === undefined) return <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">Loading…</div>
-  if (me === null) return <LoginScreen />
+  if (me === null) return <LoginScreen accent={accent} />
   return <Console me={me} />
 }
 
@@ -693,7 +716,9 @@ function Console({ me }: { me: Member }) {
   return (
     <div className="flex h-screen bg-muted/30 text-foreground">
       {sidebarCollapsed && (
-        <aside className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-background py-3">
+        <aside className="relative flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-background py-3">
+          {/* Per-tenant accent strip — invisible until a tenant sets a brand colour (var(--brand)). */}
+          <div className="absolute inset-x-0 top-0 h-1" style={{ background: 'var(--brand)' }} />
           <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground" title="expand sidebar" onClick={() => setSidebarCollapsed(false)}>
             <PanelLeftOpen className="h-4 w-4" />
           </Button>
@@ -708,6 +733,8 @@ function Console({ me }: { me: Member }) {
         </aside>
       )}
       <aside className={`${sidebarCollapsed ? 'hidden' : 'flex'} w-72 shrink-0 flex-col border-r bg-background`}>
+        {/* Per-tenant accent strip — invisible until a tenant sets a brand colour (var(--brand)). */}
+        <div className="h-1 shrink-0" style={{ background: 'var(--brand)' }} />
         {/* Top: brand + primary nav (fixed) */}
         <div className="p-4 pb-2">
           <div className="mb-4 flex items-start justify-between">
@@ -818,18 +845,26 @@ function Console({ me }: { me: Member }) {
       </aside>
 
       <main className="flex flex-1 flex-col overflow-hidden">
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <div className="flex items-center gap-3">
-            <h1 className="max-w-[60vw] truncate text-lg font-semibold">
-              {route === 'sessions' && selected ? selected.title : route === 'inbox' ? 'Inbox' : route === 'sessions' ? 'Sessions' : route === 'connectors' ? 'Connections' : route === 'team' ? 'Team' : route === 'automations' ? 'Automations' : route === 'tasks' ? 'Tasks' : route === 'memory' ? 'Memory' : route === 'kb' ? 'Knowledge Base' : route === 'skills' ? 'Skills' : route === 'files' ? 'Files' : route === 'artifacts' ? 'Artifacts' : route === 'audit' ? 'Audit log' : route === 'settings' ? 'Company settings' : route === 'docs' ? 'Docs' : route === 'new-agent' ? 'New agent' : route === 'agent' ? `Agent · ${editAgent}` : 'Agents'}
-            </h1>
-            {/* When a terminal is open the page fills with the iframe; this pins a way back to the list next to the title. */}
-            {route === 'sessions' && selected && (
-              <Button size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs" onClick={() => nav('sessions')} title="back to the full sessions list">
-                <ArrowLeft className="h-3.5 w-3.5" /> All sessions
-              </Button>
-            )}
-          </div>
+        <div className="flex items-center justify-between border-b px-6 py-3">
+          {route === 'sessions' && selected ? (
+            /* Open session: a compact title over its facts row, so the facts read as a subline rather
+               than crowding the terminal tab strip or the header's right edge. */
+            <div className="flex min-w-0 flex-col gap-1">
+              <div className="flex items-center gap-3">
+                <h1 className="max-w-[60vw] truncate text-sm font-semibold">{selected.title}</h1>
+                <Button size="sm" variant="outline" className="h-6 gap-1 px-2 text-xs" onClick={() => nav('sessions')} title="back to the full sessions list">
+                  <ArrowLeft className="h-3.5 w-3.5" /> All sessions
+                </Button>
+              </div>
+              <SessionFacts session={sessions.find((s) => s.tmux === selected.tmux)} />
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <h1 className="max-w-[60vw] truncate text-lg font-semibold">
+                {route === 'inbox' ? 'Inbox' : route === 'sessions' ? 'Sessions' : route === 'connectors' ? 'Connections' : route === 'team' ? 'Team' : route === 'automations' ? 'Automations' : route === 'tasks' ? 'Tasks' : route === 'memory' ? 'Memory' : route === 'kb' ? 'Knowledge Base' : route === 'skills' ? 'Skills' : route === 'files' ? 'Files' : route === 'artifacts' ? 'Artifacts' : route === 'audit' ? 'Audit log' : route === 'settings' ? 'Company settings' : route === 'docs' ? 'Docs' : route === 'new-agent' ? 'New agent' : route === 'agent' ? `Agent · ${editAgent}` : 'Agents'}
+              </h1>
+            </div>
+          )}
         </div>
 
         <div className={`min-h-0 flex-1 ${fullBleed ? '' : 'overflow-y-auto p-6'}`}>
@@ -1541,7 +1576,7 @@ function SessionsPage({
         {/* per-tab controls — resume (resumable + not live) / stop (running only) + delete, revealed on hover or when active */}
         <span className={`flex items-center gap-1 ${selected.tmux === s.tmux ? '' : 'opacity-0 group-hover/tab:opacity-100'}`}>
           {canResume(s) && (
-            <button className="rounded p-0.5 text-emerald-400 hover:bg-neutral-600 hover:text-emerald-300" onClick={() => onOpen(s.tmux, s.agent + ' · ' + s.id)} title="resume — reopen and continue this session (claude --resume)">
+            <button className="rounded p-0.5 text-emerald-400 hover:bg-neutral-600 hover:text-emerald-300" onClick={() => resumeAndOpen(s, onOpen)} title="resume — reopen and continue this session (claude --resume)">
               <Play className="h-3 w-3" />
             </button>
           )}
@@ -1572,7 +1607,7 @@ function SessionsPage({
       <div className="flex h-full flex-col">
         <div className="flex items-center gap-2 border-b bg-neutral-900 px-2 py-1.5 text-xs text-neutral-300">
           <TerminalSquare className="h-4 w-4 shrink-0" />
-          {/* Only the tabs scroll; the "All sessions" button stays pinned right so it's always reachable. */}
+          {/* Only the tabs scroll; the "ended" toggle stays pinned right so it's always reachable. */}
           <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
             {liveTabs.map(renderTab)}
             {selectedEnded && renderTab(selectedEnded)}
@@ -1719,7 +1754,7 @@ function SessionsPage({
               </button>
               <div className="mt-2 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                 {canResume(s) && (
-                  <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-xs text-emerald-600" onClick={() => onOpen(s.tmux, s.agent + ' · ' + s.id)} title="reopen and continue this session (claude --resume)">
+                  <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-xs text-emerald-600" onClick={() => resumeAndOpen(s, onOpen)} title="reopen and continue this session (claude --resume)">
                     <Play className="h-3 w-3" /> Resume
                   </Button>
                 )}
@@ -1775,7 +1810,7 @@ function SessionsPage({
               </button>
               <div className="flex w-32 shrink-0 items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                 {canResume(s) && (
-                  <Button size="icon" variant="ghost" className="h-7 w-7 text-emerald-600" onClick={() => onOpen(s.tmux, s.agent + ' · ' + s.id)} title="resume — reopen and continue this session (claude --resume)">
+                  <Button size="icon" variant="ghost" className="h-7 w-7 text-emerald-600" onClick={() => resumeAndOpen(s, onOpen)} title="resume — reopen and continue this session (claude --resume)">
                     <Play className="h-3.5 w-3.5" />
                   </Button>
                 )}
@@ -1812,6 +1847,40 @@ const isImportant = (m: Msg): boolean =>
   m.type === 'update' && !!(m.args as { important?: boolean } | undefined)?.important
 
 /** Compact relative time for the feed: 12s · 5m · 3h · 2d · 4w. */
+/** The open session's facts, rendered as a subline under the session title (owner/agent/started-by/
+ *  age/status). Its own row, so every fact shows; it wraps on a narrow viewport rather than hiding. */
+function SessionFacts({ session: s }: { session?: Session }) {
+  if (!s) return null
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <span className="flex items-center gap-1.5" title={`status: ${statusLabel(s)}`}>
+        <span className={`h-1.5 w-1.5 rounded-full ${statusDot(s)}`} />
+        <span className="text-foreground">{statusLabel(s)}</span>
+      </span>
+      {s.runAsLabel && (
+        <span className="flex items-center gap-1" title={`runs as ${s.runAsLabel}`}>
+          <User className="h-3.5 w-3.5 shrink-0 opacity-60" />
+          <span className="max-w-[160px] truncate text-foreground">{s.runAsLabel}</span>
+        </span>
+      )}
+      <span className="flex items-center gap-1" title={`agent ${s.agent}`}>
+        <Bot className="h-3.5 w-3.5 shrink-0 opacity-60" />
+        <span className="max-w-[160px] truncate">{s.agent}</span>
+      </span>
+      {s.spawnedByLabel && (
+        <span className="flex max-w-[200px] items-center gap-1" title={`started by ${s.spawnedByLabel}`}>
+          <Play className="h-3.5 w-3.5 shrink-0 opacity-60" />
+          <span className="truncate">{s.spawnedByLabel}</span>
+        </span>
+      )}
+      <span className="flex items-center gap-1" title={`created ${new Date(s.createdAt).toLocaleString()}`}>
+        <Clock className="h-3.5 w-3.5 shrink-0 opacity-60" />
+        <span>{timeAgo(s.createdAt)} ago</span>
+      </span>
+    </div>
+  )
+}
+
 function timeAgo(ts: number): string {
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000))
   if (s < 60) return `${s}s`
@@ -2073,10 +2142,14 @@ function FeedItem({ m, onOpen, onOpenArtifact, onOpenTask, onDismiss, unread }: 
     verb = 'published'; detail = m.body
     badge = meta.filename ? <Badge variant="outline" className="max-w-[40%] px-1.5 py-0 text-[10px] font-normal">{meta.filename}</Badge> : null
   } else if (m.type === 'approval') {
+    // cancelled = the session ended before a human decided — a neutral "never ran", not a rejection.
+    const cancelledA = m.status === 'cancelled'
     Icon = m.status === 'approved' ? CheckCircle2 : XCircle
-    iconCls = m.status === 'approved' ? 'text-emerald-600' : 'text-red-600'
-    verb = <>{m.title}{m.resolvedBy && <span className="text-muted-foreground"> · by {m.resolvedBy}</span>}</>
-    badge = <Badge variant={m.status === 'approved' ? 'default' : 'destructive'} className="px-1.5 py-0 text-[10px]">{m.status}</Badge>
+    iconCls = m.status === 'approved' ? 'text-emerald-600' : cancelledA ? 'text-muted-foreground' : 'text-red-600'
+    verb = <>{m.title}{m.resolvedBy && !cancelledA && <span className="text-muted-foreground"> · by {m.resolvedBy}</span>}</>
+    badge = cancelledA
+      ? <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-normal text-muted-foreground">cancelled</Badge>
+      : <Badge variant={m.status === 'approved' ? 'default' : 'destructive'} className="px-1.5 py-0 text-[10px]">{m.status}</Badge>
   } else if (m.type === 'question') {
     Icon = HelpCircle; iconCls = 'text-sky-600'
     const cancelled = m.status === 'cancelled'
@@ -2597,7 +2670,10 @@ function ArtifactsPage({ me, initialId }: { me: Member; initialId?: string }) {
 }
 
 // ── Login ────────────────────────────────────────────────────────────────────────
-function LoginScreen() {
+function LoginScreen({ accent }: { accent?: string }) {
+  // Tenant accent (when set) tints the primary Sign-in button so even the pre-login screen is
+  // identifiable across several tenants; falls back to the default primary styling otherwise.
+  const brandStyle = accent ? { backgroundColor: accent, color: readableOn(accent) } : undefined
   const [value, setValue] = useState('')
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)
@@ -2632,7 +2708,7 @@ function LoginScreen() {
           <Field label="Magic link or token">
             <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder="https://…/accept?token=…" onKeyDown={(e) => e.key === 'Enter' && go()} />
           </Field>
-          <Button className="mt-4 w-full" onClick={go} disabled={!value.trim()}>Sign in</Button>
+          <Button className="mt-4 w-full" style={brandStyle} onClick={go} disabled={!value.trim()}>Sign in</Button>
 
           <div className="my-4 flex items-center gap-3 text-xs text-muted-foreground">
             <div className="h-px flex-1 bg-border" />lost your link?<div className="h-px flex-1 bg-border" />
@@ -5844,8 +5920,8 @@ function AuditPage() {
   )
 }
 
-type SettingsTab = 'company' | 'runtime' | 'secrets' | 'memory' | 'policy' | 'governance' | 'system'
-const SETTINGS_TABS: SettingsTab[] = ['company', 'runtime', 'secrets', 'memory', 'policy', 'governance', 'system']
+type SettingsTab = 'company' | 'runtime' | 'theme' | 'secrets' | 'memory' | 'policy' | 'governance' | 'system'
+const SETTINGS_TABS: SettingsTab[] = ['company', 'runtime', 'theme', 'secrets', 'memory', 'policy', 'governance', 'system']
 
 // The active sub-tab is a URL detail (`#/settings/<tab>`) so a refresh / shared link lands on the same
 // tab. `tab` is the raw detail from the router; `onTab` writes it back into the hash.
@@ -5858,6 +5934,7 @@ function SettingsPage({ me, state, tab: tabParam, onTab }: { me: Member; state: 
       <div className="flex w-48 shrink-0 flex-col gap-1 rounded-lg border bg-background p-1 self-start [&_button]:text-left">
         <TabButton on={tab === 'company'} onClick={() => setTab('company')}>Company context</TabButton>
         <TabButton on={tab === 'runtime'} onClick={() => setTab('runtime')}>Runtime defaults</TabButton>
+        <TabButton on={tab === 'theme'} onClick={() => setTab('theme')}>Theme</TabButton>
         <TabButton on={tab === 'secrets'} onClick={() => setTab('secrets')}>Secrets</TabButton>
         <TabButton on={tab === 'memory'} onClick={() => setTab('memory')}>Memory backend</TabButton>
         <TabButton on={tab === 'governance'} onClick={() => setTab('governance')}>Governance</TabButton>
@@ -5867,6 +5944,7 @@ function SettingsPage({ me, state, tab: tabParam, onTab }: { me: Member; state: 
       <div className="min-w-0 flex-1">
         {tab === 'company' ? <CompanySettings me={me} />
           : tab === 'runtime' ? <RuntimeDefaultsSettings me={me} />
+          : tab === 'theme' ? <ThemeSettings me={me} state={state} />
           : tab === 'secrets' ? <SecretsSettings me={me} />
           : tab === 'memory' ? <MemorySettings me={me} />
           : tab === 'governance' ? <GovernanceSettings me={me} />
@@ -7118,6 +7196,124 @@ function CompanySettings({ me }: { me: Member }) {
             <Button onClick={save} disabled={busy || !dirty}>
               {dirty ? 'Save' : 'Saved'}
             </Button>
+            {hint && <span className="font-mono text-xs text-muted-foreground">{hint}</span>}
+            {meta.updatedAt && (
+              <span className="ml-auto text-[11px] text-muted-foreground">
+                last updated {new Date(meta.updatedAt).toLocaleString()}{meta.updatedBy ? ` by ${meta.updatedBy}` : ''}
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+/** Settings → Theme — the per-tenant accent colour + favicon badge, so several tenants running in
+ *  parallel are distinguishable at a glance (sidebar strip, browser-tab favicon, login screen). */
+function ThemeSettings({ me, state }: { me: Member; state: StateResp | null }) {
+  const isAdmin = me.role === 'owner' || me.role === 'admin'
+  const [accent, setAccent] = useState('')      // '' = no accent (default theme)
+  const [badge, setBadge] = useState('')
+  const [saved, setSaved] = useState<Branding>({})
+  const [meta, setMeta] = useState<{ updatedAt?: number; updatedBy?: string }>({})
+  const [busy, setBusy] = useState(false)
+  const [hint, setHint] = useState('')
+
+  useEffect(() => {
+    api.branding().then((b) => {
+      if (b.error) return setHint('⚠ ' + b.error)
+      setAccent(b.accentColor ?? ''); setBadge(b.badge ?? '')
+      setSaved({ accentColor: b.accentColor, badge: b.badge }); setMeta({ updatedAt: b.updatedAt, updatedBy: b.updatedBy })
+    }).catch(() => {})
+  }, [])
+
+  const validHex = /^#[0-9a-fA-F]{6}$/.test(accent)
+  const cur: Branding = { accentColor: validHex ? accent.toLowerCase() : undefined, badge: badge.trim() || undefined }
+  const dirty = cur.accentColor !== saved.accentColor || cur.badge !== saved.badge
+  const tenantName = state?.tenantName || state?.tenant
+  const previewFavicon = faviconDataUri(cur.accentColor, cur.badge, tenantName)
+
+  const save = async () => {
+    setBusy(true); setHint('')
+    const r = await api.saveBranding(cur)
+    setBusy(false)
+    if (r.error) return setHint('⚠ ' + r.error)
+    setSaved({ accentColor: r.accentColor, badge: r.badge }); setMeta({ updatedAt: Date.now(), updatedBy: me.email })
+    // Go live immediately — no reload — for this browser.
+    applyAccent(r.accentColor); applyFavicon(faviconDataUri(r.accentColor, r.badge, tenantName))
+    setAccent(r.accentColor ?? ''); setBadge(r.badge ?? '')
+    setHint('saved'); setTimeout(() => setHint(''), 1500)
+  }
+  const clear = () => { setAccent(''); setBadge('') }
+
+  if (!isAdmin) return <div className="text-sm text-muted-foreground">Owner or admin access required.</div>
+
+  return (
+    <div className="max-w-3xl space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Give this tenant a <strong>colour + favicon badge</strong> so it's instantly recognisable when you're
+        running several consoles side by side. The accent tints the sidebar strip, active nav item and focus
+        rings; the badge becomes the browser-tab favicon. Applies to <strong>this tenant only</strong>. Leave
+        the colour blank for the default look.
+      </p>
+
+      <Card>
+        <CardContent className="space-y-4 p-4">
+          <div className="flex flex-wrap items-end gap-5">
+            <Field label="Accent colour">
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={validHex ? accent : '#7c3aed'}
+                  onChange={(e) => setAccent(e.target.value)}
+                  className="h-9 w-12 cursor-pointer rounded border bg-background p-0.5"
+                  aria-label="accent colour"
+                />
+                <Input
+                  value={accent}
+                  onChange={(e) => setAccent(e.target.value.trim())}
+                  placeholder="#7c3aed"
+                  className="w-32 font-mono text-xs"
+                />
+              </div>
+            </Field>
+            <Field label="Favicon badge" help="An emoji or 1–3 letters. Blank → the tenant's initial.">
+              <Input
+                value={badge}
+                onChange={(e) => setBadge(e.target.value)}
+                placeholder={tenantName ? tenantName.charAt(0).toUpperCase() : '🟣'}
+                className="w-28"
+              />
+            </Field>
+          </div>
+
+          {accent && !validHex && <div className="text-xs text-amber-600">Enter a 6-digit hex colour like <span className="font-mono">#7c3aed</span> (or clear it).</div>}
+
+          {/* Live preview — favicon tile + a mock sidebar showing the accent strip and active nav item. */}
+          <div className="flex flex-wrap items-center gap-5 rounded-lg border bg-muted/30 p-4">
+            <div className="flex flex-col items-center gap-1">
+              <img src={previewFavicon} alt="favicon preview" className="h-12 w-12 rounded-[10px] shadow-sm" />
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">favicon</span>
+            </div>
+            <div className="w-44 overflow-hidden rounded-md border bg-background">
+              <div className="h-1" style={{ background: cur.accentColor || 'transparent' }} />
+              <div className="p-2">
+                <div className="mb-1.5 text-[11px] font-semibold">⚙️ {tenantName || 'Agent OS'}</div>
+                <div
+                  className="rounded px-2 py-1 text-[11px] font-medium"
+                  style={cur.accentColor ? { background: cur.accentColor, color: readableOn(cur.accentColor) } : { background: 'var(--sidebar-primary)', color: 'var(--sidebar-primary-foreground)' }}
+                >Inbox</div>
+                <div className="px-2 py-1 text-[11px] text-muted-foreground">Agents</div>
+                <div className="px-2 py-1 text-[11px] text-muted-foreground">Tasks</div>
+              </div>
+            </div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">sidebar</span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Button onClick={save} disabled={busy || !dirty}>{dirty ? 'Save' : 'Saved'}</Button>
+            {(accent || badge) && <Button variant="ghost" onClick={clear} disabled={busy}>Clear</Button>}
             {hint && <span className="font-mono text-xs text-muted-foreground">{hint}</span>}
             {meta.updatedAt && (
               <span className="ml-auto text-[11px] text-muted-foreground">

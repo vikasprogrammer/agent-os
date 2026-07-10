@@ -23,12 +23,13 @@ import { Consolidation, CONSOLIDATOR_ID } from './edge/consolidation';
 import { readAgentCatalog, installAgentFromCatalog, BUILTIN_SEED_IDS } from './edge/agent-catalog';
 import { checkForUpdate, applyUpdate, restartService } from './edge/updater';
 import { CATALOG, redact } from './connectors/connectors';
+import { redactHost, type HostProtocol, type HostPosture } from './hosts/hosts';
 import { listConnectedAccounts, deleteConnectedAccount, listToolkits, serviceUserId, initiateConnection, verifyComposioWebhook, parseComposioEvent } from './connectors/composio';
 import { JsonPolicyEngine, PolicyDocument, validatePolicyDocument, withAlwaysAllow } from './governance/policy';
 import { PRESET_SOURCES, browseRepo, fetchSkill, searchSkillsh } from './governance/skill-registry';
 import { extractSkillsFromZip } from './governance/skill-zip';
 import { parseBundle } from './governance/bundle-import';
-import { AgentManifest, ApprovalRequest, EmbeddingsConfig, ENV_NAME, IDENTITY_PROVIDERS, IdentityProvider, Member, MemoryConfig, MemoryMaintenance, MemoryPreload, MemoryRanking, MemoryType, Role, Run, sanitizeCategory, sanitizeExamplePrompts, sanitizeIcon, sanitizeRuntimeTuning, sanitizeShellSecrets, TaskStatus } from './types';
+import { AgentManifest, ApprovalRequest, Branding, EmbeddingsConfig, ENV_NAME, IDENTITY_PROVIDERS, IdentityProvider, Member, MemoryConfig, MemoryMaintenance, MemoryPreload, MemoryRanking, MemoryType, Role, Run, sanitizeBranding, sanitizeCategory, sanitizeExamplePrompts, sanitizeIcon, sanitizeRuntimeTuning, sanitizeShellSecrets, TaskStatus } from './types';
 import { AgentConfigSnapshot } from './state/agent-revisions';
 
 /** Settings → Memory view: stored backend config with secrets redacted to `…Set` booleans. */
@@ -285,7 +286,7 @@ async function handle(os: AgentOS, tm: TerminalManager, autos: Automations, req:
     const token = url.searchParams.get('token') || '';
     const peek = os.team.peekToken(token);
     if (!peek) return redirect(res, '/?login=invalid');
-    return sendHtml(res, 200, acceptLandingHtml(peek.email, token));
+    return sendHtml(res, 200, acceptLandingHtml(peek.email, token, os.settings.branding().accentColor));
   }
   if (method === 'POST' && p === '/accept') {
     const accepted = os.team.acceptToken(url.searchParams.get('token') || '');
@@ -307,6 +308,13 @@ async function handle(os: AgentOS, tm: TerminalManager, autos: Automations, req:
     res.writeHead(200, headers);
     res.end(JSON.stringify({ member: m }));
     return;
+  }
+  // Per-tenant console branding (accent colour + favicon badge). PUBLIC + display-only (no secrets):
+  // the SPA fetches this on mount — before any session exists — so the login screen and the browser-tab
+  // favicon are already tenant-coloured. `tenantName` lets the favicon fall back to the tenant's initial.
+  if (method === 'GET' && p === '/api/branding') {
+    const b = os.settings.branding();
+    return sendJson(res, 200, { tenant: os.tenant, tenantName: os.tenantName, accentColor: b.accentColor, badge: b.badge });
   }
   // Self-service recovery: a member who lost their session (new device, cleared cookies, expired
   // window) asks for a fresh sign-in link WITHOUT needing an admin to mint one. Public + neutral: we
@@ -1228,8 +1236,9 @@ async function handle(os: AgentOS, tm: TerminalManager, autos: Automations, req:
     // Close the residue loophole: a removed member's PERSONAL connectors (their own credentials) must
     // not outlive the account. Sessions, invites and assignment grants were cleared in removeMember.
     const connectorsRemoved = os.connectors.removeByOwner(teamMember[1]).length;
-    os.audit.append({ ts: Date.now(), runId: '-', tenant: os.tenant, principal: me.email, type: 'member.removed', data: { member: teamMember[1], connectorsRemoved } });
-    return sendJson(res, 200, { ...out, connectorsRemoved });
+    const hostsRemoved = os.hosts.removeByOwner(teamMember[1]).length;
+    os.audit.append({ ts: Date.now(), runId: '-', tenant: os.tenant, principal: me.email, type: 'member.removed', data: { member: teamMember[1], connectorsRemoved, hostsRemoved } });
+    return sendJson(res, 200, { ...out, connectorsRemoved, hostsRemoved });
   }
   const teamAssign = p.match(/^\/api\/team\/assignments\/([\w.-]+)$/);
   if (method === 'PUT' && teamAssign) {
@@ -1422,6 +1431,17 @@ async function handle(os: AgentOS, tm: TerminalManager, autos: Automations, req:
     if (!tm.sessionAgent(id)) return sendJson(res, 404, { error: 'unknown session' });
     if (!tm.canViewSession(id, me)) return sendJson(res, 403, { error: 'not allowed to manage this session' });
     return sendJson(res, 200, { ok: tm.stopSession(id, me.email) });
+  }
+  // Deliberately resume a stopped session: lift the stop-block so the ttyd attach wrapper resurrects it
+  // (`claude --resume`) on the next reconnect. The actual relaunch happens in attach.sh when the terminal
+  // (re)connects; this just clears the "stay stopped" sentinel. Same per-member gate as stop.
+  const resumeMatch = p.match(/^\/api\/sessions\/([\w-]+)\/resume$/);
+  if (method === 'POST' && resumeMatch) {
+    const id = resumeMatch[1];
+    if (!tm.sessionAgent(id)) return sendJson(res, 404, { error: 'unknown session' });
+    if (!tm.canViewSession(id, me)) return sendJson(res, 403, { error: 'not allowed to manage this session' });
+    tm.allowResume(id);
+    return sendJson(res, 200, { ok: true });
   }
   // Permanently delete a session (kill tmux + cascade messages/questions/files) — same gate.
   const sessMatch = p.match(/^\/api\/sessions\/([\w-]+)$/);
@@ -2069,6 +2089,20 @@ async function handle(os: AgentOS, tm: TerminalManager, autos: Automations, req:
     if (tErr) return sendJson(res, 400, { error: tErr });
     const saved = os.settings.setRuntimeDefaults(tuning, me.email);
     os.audit.append({ ts: Date.now(), runId: '-', tenant: os.tenant, principal: me.email, type: 'settings.runtimeDefaults.updated', data: { ...tuning } });
+    return sendJson(res, 200, { ok: true, ...saved });
+  }
+
+  // ── UI branding (per-tenant accent colour + favicon badge) — owner/admin edits ──
+  // The public read is GET /api/branding (above the member gate); this is the admin editor surface.
+  if (method === 'GET' && p === '/api/settings/branding') {
+    if (!isAdmin(me)) return sendJson(res, 403, { error: 'owner or admin required' });
+    return sendJson(res, 200, { ...os.settings.branding(), ...os.settings.brandingMeta() });
+  }
+  if (method === 'PUT' && p === '/api/settings/branding') {
+    if (!isAdmin(me)) return sendJson(res, 403, { error: 'owner or admin required' });
+    const b = await readBody(req);
+    const saved = os.settings.setBranding(sanitizeBranding(b as Partial<Record<keyof Branding, unknown>>), me.email);
+    os.audit.append({ ts: Date.now(), runId: '-', tenant: os.tenant, principal: me.email, type: 'settings.branding.updated', data: { ...saved } });
     return sendJson(res, 200, { ok: true, ...saved });
   }
 
@@ -2850,6 +2884,79 @@ async function handle(os: AgentOS, tm: TerminalManager, autos: Automations, req:
     }
   }
 
+  // ── host connections (Host shape of the access model — docs/host-connections-plan.md, Phase 2a) ──
+  // Governed reachable destinations (SSH / internal HTTP / DB). Same org/personal/shared ownership +
+  // auth as connectors. The governance that reads these rows is Phase 2b (not wired yet).
+  if (method === 'GET' && p === '/api/hosts') {
+    return sendJson(res, 200, { hosts: os.hosts.listForConsole(me.id, isAdmin(me)).map(redactHost) });
+  }
+  if (method === 'POST' && p === '/api/hosts') {
+    const b = await readBody(req);
+    // Company (org) hosts are owner/admin-managed; personal ones any member adds for themselves.
+    const scope = b.scope === 'personal' ? 'personal' : 'org';
+    if (scope === 'org' && !isAdmin(me)) return sendJson(res, 403, { error: 'only an owner or admin can add a company host' });
+    try {
+      const created = os.hosts.add({
+        name: b.name ? String(b.name) : '',
+        match: b.match ? String(b.match) : '',
+        protocol: b.protocol ? (b.protocol as HostProtocol) : undefined,
+        credential: b.credential ? String(b.credential) : undefined,
+        posture: b.posture ? (b.posture as HostPosture) : undefined,
+        // The owner is always the caller — never trust a client-supplied owner id.
+        scope,
+        ownerMemberId: scope === 'personal' ? me.id : undefined,
+      });
+      os.audit.append({ ts: Date.now(), runId: '-', tenant: os.tenant, principal: me.email, type: 'host.added', data: { host: created.id, scope, match: created.match, protocol: created.protocol } });
+      return sendJson(res, 200, redactHost(created));
+    } catch (e) {
+      return sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  const hostMatch = p.match(/^\/api\/hosts\/([\w-]+)$/);
+  if (hostMatch) {
+    const id = hostMatch[1];
+    const h = os.hosts.get(id);
+    if (!h) return sendJson(res, 404, { error: 'not found' });
+    // Org hosts: owner/admin only. Personal: the owner, or an owner/admin (oversight). Same as connectors.
+    const canManage = isAdmin(me) || (h.scope === 'personal' && h.ownerMemberId === me.id);
+    if (!canManage) return sendJson(res, 403, { error: 'not allowed to manage this host' });
+    if (method === 'DELETE') {
+      const ok = os.hosts.remove(id);
+      if (ok) os.audit.append({ ts: Date.now(), runId: '-', tenant: os.tenant, principal: me.email, type: 'host.removed', data: { host: id } });
+      return sendJson(res, ok ? 200 : 404, { ok });
+    }
+    if (method === 'PATCH') {
+      const b = await readBody(req);
+      try {
+        // Share/un-share a personal host with the team.
+        if (typeof b.shared === 'boolean') {
+          if (h.scope !== 'personal') return sendJson(res, 400, { error: 'only personal hosts can be shared' });
+          const updated = os.hosts.setShared(id, b.shared);
+          if (updated) os.audit.append({ ts: Date.now(), runId: '-', tenant: os.tenant, principal: me.email, type: 'host.shared', data: { host: id, shared: b.shared } });
+          return sendJson(res, updated ? 200 : 404, updated ? redactHost(updated) : { error: 'not found' });
+        }
+        // Enable/disable.
+        if (typeof b.enabled === 'boolean') {
+          const updated = os.hosts.setEnabled(id, b.enabled);
+          return sendJson(res, updated ? 200 : 404, updated ? redactHost(updated) : { error: 'not found' });
+        }
+        // Edit fields. A blank credential means "leave as-is" (the browser only ever sees a redacted
+        // value, so echoing it back must NOT overwrite the stored secret ref).
+        const patch: Record<string, unknown> = {};
+        if (typeof b.name === 'string') patch.name = b.name;
+        if (typeof b.match === 'string') patch.match = b.match;
+        if (typeof b.protocol === 'string') patch.protocol = b.protocol as HostProtocol;
+        if (typeof b.posture === 'string') patch.posture = b.posture as HostPosture;
+        if (typeof b.credential === 'string' && b.credential.trim() !== '') patch.credential = b.credential;
+        const updated = os.hosts.update(id, patch);
+        if (updated) os.audit.append({ ts: Date.now(), runId: '-', tenant: os.tenant, principal: me.email, type: 'host.updated', data: { host: id, match: updated.match, protocol: updated.protocol } });
+        return sendJson(res, updated ? 200 : 404, updated ? redactHost(updated) : { error: 'not found' });
+      } catch (e) {
+        return sendJson(res, 400, { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  }
+
   // ── secrets vault (owner/admin): encrypted-at-rest credentials. Values are NEVER returned ──
   if (method === 'GET' && p === '/api/secrets') {
     if (!isAdmin(me)) return sendJson(res, 403, { error: 'owner or admin required' });
@@ -3328,14 +3435,29 @@ function sendHtml(res: http.ServerResponse, status: number, html: string): void 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
+/** Black or white — whichever reads better on the given `#rrggbb` background (WCAG relative luminance). */
+function readableOn(hex: string): '#000' | '#fff' {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4 ? '#000' : '#fff';
+}
 /**
  * The interstitial shown by GET /accept. A plain confirm page — no auto-submit — so a link
  * preview / mail-scanner that renders it never consumes the token; only the "Continue" POST does.
  * Self-contained (no app bundle) and theme-aware so it works before the SPA/session exists.
  */
-function acceptLandingHtml(email: string, token: string): string {
+function acceptLandingHtml(email: string, token: string, accent?: string): string {
   const safeEmail = escapeHtml(email);
   const action = `/accept?token=${encodeURIComponent(token)}`;
+  // Tenant accent (validated `#rrggbb`): tint the logo chip + Continue button so even the invite
+  // interstitial matches the tenant's console colour. Overrides both light + dark defaults.
+  const brand = accent && /^#[0-9a-fA-F]{6}$/.test(accent)
+    ? `<style>.logo,.card button{background:${accent}!important;color:${readableOn(accent)}!important}
+       .card button:hover{filter:brightness(.92)}</style>`
+    : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
@@ -3366,7 +3488,7 @@ function acceptLandingHtml(email: string, token: string): string {
     button { background: #f3f5f8; color: #0b0d12; }
     button:hover { background: #dfe3e9; }
   }
-</style></head>
+</style>${brand}</head>
 <body><div class="card">
   <div class="logo">A</div>
   <h1>Sign in to Agent OS</h1>

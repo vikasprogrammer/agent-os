@@ -225,7 +225,7 @@ export interface ApprovalRequest {
   level: ApprovalLevel;
   attempt: ActionAttempt;
   reason: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
   createdAt: number;
   resolvedBy?: string;
 }
@@ -237,6 +237,10 @@ export interface Approvals {
     decision: Promise<boolean>;
   };
   resolve(id: string, approved: boolean, by: string): void;
+  /** Cancel a still-pending request (the session it gated ended, so no one can decide). Settles the
+   *  waiter as denied so a live gateway/gate-hook unblocks, and marks the row `cancelled`. Returns
+   *  whether a pending request was actually cancelled. */
+  cancel(id: string, by: string): boolean;
   pending(tenant?: string): ApprovalRequest[];
 }
 
@@ -743,6 +747,30 @@ export function sanitizeRuntimeTuning(input: Partial<Record<keyof RuntimeTuning,
     tuning.permissionMode = mode as PermissionMode;
   }
   return { tuning };
+}
+
+/** Per-tenant web-console branding — a small visual stamp so several tenants running in parallel
+ *  (even across machines) are distinguishable at a glance: it recolours the sidebar accent and the
+ *  browser-tab favicon, and tints the pre-login screen. Display-only, no secrets — safe to serve
+ *  unauthenticated so the client can theme itself before login. Empty fields → the default look. */
+export interface Branding {
+  /** Accent colour as a 6-digit hex (`#7c3aed`). Undefined/empty → no override (default theme). */
+  accentColor?: string;
+  /** Favicon badge: an emoji (`🟣`) or a 1–3 char initial (`IP`). Undefined → first letter of the
+   *  tenant name is used. Purely cosmetic. */
+  badge?: string;
+}
+
+/** Normalize+validate a branding payload (from an API body): keeps only a well-formed 6-digit hex
+ *  accent (else dropped, not an error — clearing it is valid) and a short badge (≤ 3 chars after
+ *  trimming, so a single emoji or a couple of initials). Never throws; returns a clean object. */
+export function sanitizeBranding(input: Partial<Record<keyof Branding, unknown>>): Branding {
+  const out: Branding = {};
+  const accent = typeof input.accentColor === 'string' ? input.accentColor.trim() : '';
+  if (/^#[0-9a-fA-F]{6}$/.test(accent)) out.accentColor = accent.toLowerCase();
+  const badge = typeof input.badge === 'string' ? [...input.badge.trim()].slice(0, 3).join('') : '';
+  if (badge) out.badge = badge;
+  return out;
 }
 
 /** Normalize a starter-prompts payload (from an API body or config file): coerces to an array of

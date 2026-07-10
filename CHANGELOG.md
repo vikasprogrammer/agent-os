@@ -8,6 +8,125 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
+## [0.74.2] — 2026-07-10
+### Changed
+- **Session facts read as a subline under a smaller title.** Instead of sitting on the header's right
+  edge (v0.74.1), the owner/agent/started-by/age/status cluster now stacks directly beneath the open
+  session's title, which is dropped to a compact size. The facts row shows every fact and wraps on a
+  narrow viewport rather than hiding them; the status pill leads.
+
+## [0.74.1] — 2026-07-10
+### Changed
+- **Session facts moved to the page header.** The owner/agent/started-by/age/status cluster from v0.74.0
+  now lives in the spare right-hand space of the main page header (next to the "All sessions" back button)
+  instead of the terminal tab strip, where it was squeezing the session tabs out of view. Same facts and
+  progressive hiding; the tab strip is back to full width.
+
+## [0.74.0] — 2026-07-10
+### Added
+- **Session detail top bar shows owner + facts.** The open session's terminal header (`#/sessions/<id>`)
+  now pins a right-aligned fact cluster next to the tab strip — owner (run-as member), agent, started-by,
+  age, a colored status pill, and the session id — reusing the existing row height (no taller header).
+  Facts hide progressively on narrower panes so the row never wraps; the status pill always stays visible.
+
+## [0.73.1] — 2026-07-10
+### Docs
+- **README: "Running on macOS vs Linux" section.** Documents that agent sessions run in a tmux server
+  that outlives a server restart (re-adopted via `<home>/tmux.sock`), and the two systemd unit settings
+  that are **required** on Linux or a `systemctl restart` silently kills every session — `KillMode=process`
+  and `PrivateTmp=false` (both already correct in the bundled `agent-os.service`) — plus the operational
+  rule to never run `tmux` against the app socket as root. Captures the platform-difference lessons from
+  the v0.72.1/0.72.2 fixes.
+
+## [0.73.0] — 2026-07-09
+### Added
+- **Host connections — a new "Host" shape on the Connections page.** You can now register the hosts
+  your agents reach — an SSH box, an internal service, a database — as first-class connections:
+  name, a match pattern (hostname / wildcard / CIDR / `host:port`), protocol, an optional
+  Secrets-vault credential (`secret:KEY`), and a default posture (allow / ask / never). Same
+  org/personal/shared ownership and owner-admin management as MCP connectors; a `hosts` table +
+  `/api/hosts` CRUD back it. **Phase 2a of the access model** (`docs/host-connections-plan.md`) —
+  this is the registry + UI only; the gate does **not** govern reaches to these hosts yet (that's
+  Phase 2b), and the UI says so.
+
+## [0.72.3] — 2026-07-09
+### Fixed
+- **A naturally-finished session no longer auto-resurrects either** (follow-up to v0.72.0, which fixed
+  it for the Stop button). When claude exits on its own, the launcher normally holds the pane on a
+  "press [r] to resume" prompt — but if that pane dies (a detached/idle `read` bailing out, seen on the
+  Linux boxes), ttyd's silent auto-reconnect re-ran `attach.sh` and `claude --resume`d the finished
+  session back to life. `markEnded` now drops the same stay-stopped sentinel as a manual stop (inert
+  while the holding pane lives, decisive if it dies); a deliberate re-open or **Resume** clears it. The
+  idle reaper does the same, so a reaped resident session stays reaped instead of un-reaping itself on
+  a still-open tab (a later Slack reply still revives it).
+
+## [0.72.2] — 2026-07-09
+### Fixed
+- **`PrivateTmp=false` in `agent-os.service` — the other half of the restart-survival fix (v0.72.1).**
+  With `KillMode=process` the tmux server now survives a restart, but the unit still shipped
+  `PrivateTmp=true`, which hands every service *invocation* its own throwaway `/tmp`. On the first
+  restart-after-fix the surviving tmux server stayed pinned to the previous invocation's now-torn-down
+  `/tmp` namespace, so the `claude` CLI's `mkdir /tmp/claude-<uid>` failed with `ENOENT` and the session
+  died anyway (`claude session ended`). `PrivateTmp=false` makes the service share the host's stable
+  `/tmp`, which persists across restarts, so a surviving session keeps a valid `/tmp` — matching
+  macOS/launchd. **Deploy note:** flip `PrivateTmp=true`→`false` in each live unit
+  (`agent-os.service` on ExpressTech, `agent-os-instawp` on the jump-server), `daemon-reload`, then do
+  one clean restart (kill any stale tmux server on the data socket first so no dead-namespace server
+  lingers). Verified on both boxes: a session survives a restart and `/tmp` stays writable.
+
+## [0.72.1] — 2026-07-09
+### Fixed
+- **Restarting the server no longer kills running agent sessions on Linux/systemd** (the
+  ExpressTech/InstaWP boxes). Sessions run in a tmux server that daemonises out of node's process
+  tree, so a restart is meant to leave them alive and re-adopt them via the persistent
+  `<home>/tmux.sock` — which is exactly what happens on macOS/launchd. But the systemd unit shipped
+  `KillMode=mixed`: on stop, systemd SIGKILLs the **entire cgroup**, and a double-fork escapes the
+  process tree but **not** the cgroup, so every `systemctl restart` took the tmux server (and all live
+  sessions) down with it — they resurfaced as `crashed`. `agent-os.service` now uses
+  `KillMode=process`, so systemd signals only the main node process and leaves the tmux server (and its
+  sessions) running for the fresh process to re-adopt. **Deploy note:** the live unit files on each box
+  must be updated too (`agent-os.service` on ExpressTech, `agent-os-instawp` on the jump-server), then
+  `systemctl daemon-reload` + one restart.
+
+## [0.72.0] — 2026-07-09
+### Fixed
+- **Stopping a session from the terminal no longer auto-resumes it.** When you Stop a session, ttyd
+  (auto-reconnect on) silently re-dialled the moment the pane's tmux died, re-running the attach
+  wrapper — which `claude --resume`d the session straight back to life ("reconnected… resumes").
+  Most visible on the Linux boxes (ExpressTech/InstaWP), where the local backend + `attach.sh` drive
+  the terminal. `stopSession` now drops a per-session `.stopped` sentinel that `terminal/attach.sh`
+  checks before resurrecting: a silent auto-reconnect stays disconnected, while a **deliberate**
+  re-open (opening the terminal, or the **Resume** button → new `POST /api/sessions/:id/resume`) lifts
+  the block so resume still works on demand. The sentinel is cleared on any deliberate attach and
+  removed with the session's files on delete.
+
+## [0.71.0] — 2026-07-09
+### Added
+- **Per-tenant console branding (Settings → Theme).** Give each tenant an **accent colour** and a
+  **favicon badge** (an emoji or 1–3 initials) so several tenants running in parallel — even across
+  machines — are distinguishable at a glance. The accent tints the sidebar strip, active nav item and
+  focus rings; the badge is rendered client-side into an SVG data-URI favicon (no uploads, no
+  storage), so the browser-tab icon differs per tenant. Branding is served from a **public**
+  `GET /api/branding` so the login screen and tab favicon are already themed before sign-in, and it
+  even tints the magic-link accept page. Owner/admin edits via `GET`/`PUT /api/settings/branding`
+  (stored in the per-tenant `settings` table under `ui_branding`, audited `settings.branding.updated`);
+  applies live without a reload. Foreground colours are auto-chosen (black/white by luminance) so text
+  stays readable on any accent.
+
+## [0.70.0] — 2026-07-09
+### Changed
+- **Stopping a session retires its open approvals too.** The v0.69.0 stop-cascade for questions now
+  extends to pending **approvals**: when a session is stopped (or crashes, or is idle-reaped), its
+  pending approval cards are cancelled (new `cancelled` status) — the agent blocked on the gate is
+  gone, so approving would only clear an effect no one will perform. Cancelling settles the gateway's
+  decision as *denied* (a still-suspended gate unblocks and the effect is blocked), the gate-hook's
+  status poll returns `deny`, and the orphaned "Needs you" card drops into the dismissable Activity
+  feed (labelled *cancelled*, not a rejection).
+### Fixed
+- **`deleteSession` no longer leaks approval rows.** Permanently deleting a session now cancels its
+  pending approvals (settling any waiter) and removes its `approvals` rows, matching how it already
+  cascades messages and questions.
+
 ## [0.69.0] — 2026-07-09
 ### Added
 - **Dismiss an agent question from the Inbox.** A pending question card now has a **Dismiss** button

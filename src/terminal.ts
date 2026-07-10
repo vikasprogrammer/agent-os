@@ -360,8 +360,9 @@ export class TerminalManager {
           // only place to capture what the run did before it died. Outcome 'crashed'; idempotent, so
           // repeated polls won't write twice; skipped if the session did no real work.
           this.writeEpisode(r.id, r.agent, 'crashed');
-          // A crashed agent can't answer anything it asked — retire its open questions like a clean stop.
+          // A crashed agent can't answer or act — retire its open questions + approvals like a clean stop.
           this.cancelPendingQuestions(r.id, 'system');
+          this.cancelPendingApprovals(r.id, 'system');
         }
       }
     }
@@ -478,6 +479,9 @@ export class TerminalManager {
   async attachUrl(sessionId: string): Promise<string | null> {
     const r = this.db.prepare('SELECT tmux, spawned_by, run_as FROM term_sessions WHERE id = ?').get<{ tmux: string; spawned_by: string | null; run_as: string | null }>(sessionId);
     if (!r) return null;
+    // Opening the terminal is a deliberate act (vs ttyd's silent auto-reconnect, which never fetches an
+    // attach URL) — so lift any prior stop-block and let attach.sh resurrect a stopped session on re-open.
+    this.allowResume(sessionId);
     return this.backend.attachUrl(this.spaceFor(r.run_as ?? r.spawned_by), r.tmux);
   }
 
@@ -855,6 +859,11 @@ export class TerminalManager {
         this.backend.kill(this.spaceFor(r.run_as ?? r.spawned_by), r.tmux);
         this.db.prepare("UPDATE term_sessions SET status = 'stopped', updated_at = ? WHERE id = ?").run(Date.now(), r.id);
         this.cancelPendingQuestions(r.id, 'system');
+        this.cancelPendingApprovals(r.id, 'system');
+        // A reaped session must stay reaped — otherwise ttyd's reconnect on the still-open tab would
+        // resurrect it and defeat the reap. A later Slack reply still revives it (a fresh session), and a
+        // deliberate console re-open clears the block.
+        this.blockResume(r.id);
         this.audit(r.id, r.agent, 'chat.reaped', { idleMin: timeoutMin });
       } catch { /* one bad row must not stop the sweep */ }
     }
@@ -1415,7 +1424,7 @@ export class TerminalManager {
     const status = this.os.approvals.statusOf(id);
     if (status === 'approved') return 'allow';
     if (status === 'pending') return 'pending';
-    return 'deny'; // rejected or unknown
+    return 'deny'; // rejected, cancelled, or unknown
   }
 
   private addMessage(m: Omit<FeedMessage, 'id' | 'createdAt'>): void {
@@ -1498,6 +1507,22 @@ export class TerminalManager {
     if (!pending.length) return 0;
     this.db.prepare("UPDATE questions SET status = 'cancelled', answered_by = ?, answered_at = ? WHERE run_id = ? AND status = 'pending'").run(by, Date.now(), sessionId);
     for (const q of pending) this.audit(sessionId, by, 'question.cancelled', { questionId: q.id, reason: 'session ended' });
+    return pending.length;
+  }
+
+  /**
+   * Cancel every pending approval for a session — the sibling of {@link cancelPendingQuestions}, run
+   * when the session stops/crashes/is reaped. The agent blocked on the gate is gone, so an owner
+   * approving now would gate an effect no one will ever perform. `Approvals.cancel` marks the row
+   * `cancelled` and settles the waiter as denied; the card leaves "Needs you" and becomes a dismissable
+   * Activity row. Returns how many were cancelled.
+   */
+  private cancelPendingApprovals(sessionId: string, by: string): number {
+    const pending = this.os.approvals.pending(this.os.tenant).filter((a) => a.runId === sessionId);
+    for (const a of pending) {
+      this.os.approvals.cancel(a.id, by);
+      this.audit(sessionId, by, 'approval.cancelled', { approvalId: a.id, reason: 'session ended' });
+    }
     return pending.length;
   }
 
@@ -1662,6 +1687,12 @@ export class TerminalManager {
     if (!s) return;
     if (s.status === 'running') this.db.prepare("UPDATE term_sessions SET status = 'done', updated_at = ? WHERE id = ?").run(Date.now(), sessionId);
     this.clearNotifications(sessionId);
+    // claude exited on its own. The launcher normally holds the pane on a "press [r] to resume" prompt,
+    // but if that pane dies (an idle/detached `read` bailing out), ttyd's silent auto-reconnect would
+    // re-run attach.sh and `claude --resume` the finished session back to life. Drop the same stay-stopped
+    // sentinel as a manual stop — inert while the holding pane lives, decisive if it doesn't. A deliberate
+    // re-open/Resume clears it.
+    this.blockResume(sessionId);
     // Distil the session into one durable memory for the agent — the `report` (a 'completed' card) has
     // already landed by now if the agent left one, so writeEpisode prefers it; otherwise it summarises
     // the audit stream. Best-effort + idempotent; never blocks the end signal.
@@ -1733,9 +1764,16 @@ export class TerminalManager {
     this.backend.kill(this.spaceFor(r.run_as ?? r.spawned_by), r.tmux);
     if (r.status === 'running') this.db.prepare("UPDATE term_sessions SET status = 'stopped', updated_at = ? WHERE id = ?").run(Date.now(), sessionId);
     this.clearNotifications(sessionId);
-    // The agent that asked is now dead — no one can answer its open questions. Cancel them so they leave
-    // "Needs you" and become dismissable, rather than hanging forever as unanswerable prompts.
+    // The agent that asked is now dead — no one can answer its open questions or act on its approvals.
+    // Cancel both so they leave "Needs you" and become dismissable, rather than hanging forever.
     this.cancelPendingQuestions(sessionId, by);
+    this.cancelPendingApprovals(sessionId, by);
+    // A deliberate stop must STAY stopped. The terminal is likely still open in the browser, and ttyd
+    // (disableReconnect=false) silently re-dials the moment the pane's tmux dies — re-running attach.sh,
+    // which would otherwise `claude --resume` the session straight back to life ("reconnected… resumes").
+    // Drop a sentinel so attach.sh skips resurrection; a deliberate re-open (attachUrl / the Resume
+    // button → /resume) clears it. Auto-reconnect calls neither, so it can't self-revive.
+    this.blockResume(sessionId);
     // Halting kills the tmux shell, so the launcher's `markEnded` never fires — capture the episode
     // here instead so the work done (the audit stream) is remembered. Outcome 'stopped'; skipped if the
     // session did nothing worth remembering.
@@ -1743,6 +1781,30 @@ export class TerminalManager {
     // No "Stopped" card — a human halting a run is lifecycle noise; the audit log records who/when.
     this.audit(sessionId, by, 'session.stopped', { tmux: r.tmux });
     return true;
+  }
+
+  /** Path of a session's "do not auto-resurrect" sentinel (see stopSession / attach.sh). */
+  private stopMarkerPath(sessionId: string): string | null {
+    return this.os.paths ? path.join(this.os.paths.connectors, `session-${sessionId}.stopped`) : null;
+  }
+
+  /** Mark a session as "do not auto-resurrect" so the ttyd attach wrapper (attach.sh) won't
+   *  `claude --resume` it the next time its dead pane triggers a silent reconnect. Only a session with a
+   *  persisted launch env is resurrectable, so there's nothing to block otherwise — skip it (a headless
+   *  run leaves no env and would only litter the dir). A deliberate re-open clears it via `allowResume`. */
+  private blockResume(sessionId: string): void {
+    const p = this.stopMarkerPath(sessionId);
+    if (!p || !this.os.paths) return;
+    if (!fs.existsSync(path.join(this.os.paths.connectors, `session-${sessionId}.env`))) return;
+    try { this.ensureSecureDir(this.os.paths.connectors); fs.writeFileSync(p, '', { mode: 0o600 }); } catch { /* best-effort */ }
+  }
+
+  /** Clear the stop sentinel — a human deliberately re-opened/resumed this session, so let attach.sh
+   *  resurrect it again. No-op if it was never stopped. Idempotent. */
+  allowResume(sessionId: string): void {
+    const p = this.stopMarkerPath(sessionId);
+    if (!p) return;
+    try { fs.rmSync(p, { force: true }); } catch { /* best-effort */ }
   }
 
   /**
@@ -1755,8 +1817,11 @@ export class TerminalManager {
     if (!r) return false;
     this.backend.kill(this.spaceFor(r.run_as ?? r.spawned_by), r.tmux);
     this.removeSessionFiles(sessionId);
+    // Settle any in-memory approval waiter (deny) before the rows go, so a still-suspended gate unblocks.
+    this.cancelPendingApprovals(sessionId, by);
     this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
     this.db.prepare('DELETE FROM questions WHERE run_id = ?').run(sessionId);
+    this.db.prepare('DELETE FROM approvals WHERE run_id = ?').run(sessionId);
     this.db.prepare('DELETE FROM term_sessions WHERE id = ?').run(sessionId);
     this.audit(sessionId, by, 'session.deleted', { tmux: r.tmux, agent: r.agent });
     return true;

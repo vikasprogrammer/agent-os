@@ -8,6 +8,17 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
+## [0.79.1] — 2026-07-10
+### Fixed
+- **Warn on `policyContext` mismatch at agent registration.** An agent manifest's `policyContext` was
+  silently ignored: the engine enforces a single loaded ruleset and `classify()` drops per-agent context,
+  so an agent declaring a `policyContext` that names a *different* ruleset was governed by the enforced
+  policy, not the one it claimed — with no signal. This is a footgun: relabel a tenant's policy (or point
+  an agent at a ruleset lacking the red-line rules) and its guardrails vanish unnoticed. `registerAgent`
+  now calls a pure `policyContextMismatch()` helper and `console.warn`s once per agent when its declared
+  context diverges from `os.policy.id`, and the `AgentManifest.policyContext` doc now states it must match
+  the enforced ruleset. No behavioural change to classification. Test: `npm run test:policy-context`.
+
 ## [0.79.0] — 2026-07-10
 ### Added
 - **Sessions list: a "My sessions / All" scope toggle.** Owner and admin see the whole workspace's

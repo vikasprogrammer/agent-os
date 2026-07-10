@@ -18,6 +18,13 @@ new version heading in the same commit.
   now calls a pure `policyContextMismatch()` helper and `console.warn`s once per agent when its declared
   context diverges from `os.policy.id`, and the `AgentManifest.policyContext` doc now states it must match
   the enforced ruleset. No behavioural change to classification. Test: `npm run test:policy-context`.
+- **Align the bundled defaults so a clean install is warning-free.** The bundled policy is `default@v3`
+  but every bundled agent (`config/agents/*/agent.json`) and every hardcoded seed path
+  (`src/init.ts`, `src/server.ts`, `src/edge/consolidation.ts`) still declared `policyContext:
+  "default@v1"` — so the new warning above would fire for the product's own defaults on every fresh boot.
+  Bumped them all to `default@v3` (the demo, which loads `demo.policy.json` = `default@v1`, is left as-is),
+  so the warning now only signals genuine operator drift. Already-provisioned on-disk agents in a live
+  data home are unaffected and will warn until re-pointed — which is the intended signal.
 
 ## [0.79.0] — 2026-07-10
 ### Added

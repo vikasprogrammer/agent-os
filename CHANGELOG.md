@@ -8,6 +8,20 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
+## [0.78.1] — 2026-07-10
+### Fixed
+- **Per-member agent copies no longer dangle their shared-bundle symlinks under uid isolation.**
+  `syncAgentDir` copies an agent's dir into the member home with `cp -a` (symlinks preserved as relative
+  links). An agent whose tools are relative symlinks to a shared bundle (`iwp -> ../../tools/iwp`,
+  `tools -> ../../tools/tools`, `eng-repo`, …) then broke at the new location, because
+  `<stateRoot>/<member>/agents/<agent>/../../tools` resolves under the member home where nothing exists —
+  so every `./iwp` / `bash tools/…` / `./eng-repo` would fail the moment `AOS_UID_ISOLATION` is enabled.
+  After the full copy, `resolveExternalSymlinks` now repoints each symlink that escapes the agent dir to
+  an ABSOLUTE target resolved against the original source (in-tree links are left relative). Pure helper
+  `externalSymlinkAbsoluteTarget` decides per link. (The member uid still needs read access to the shared
+  bundle — this fixes path resolution, not bundle permissions.) Test: `npm run test:symlink-isolation`.
+
+
 ## [0.78.0] — 2026-07-10
 ### Added
 - **Host credential injection (Phase 2c) — a granted SSH host's key is now delivered to the agent's

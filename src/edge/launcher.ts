@@ -63,6 +63,28 @@ const MEMBER_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;       // also a safe path segmen
 const SESSION_RE = /^[a-z0-9]{1,32}$/i;
 const TMUX_RE = /^aos-[a-z0-9]{1,32}$/i;
 const AGENT_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;      // agent id = a folder name; safe path segment
+
+/**
+ * A per-member agent working copy is made with `cp -a` (symlinks preserved as-is). A RELATIVE symlink
+ * that points OUTSIDE the agent's own dir — e.g. the shared tool bundle `iwp -> ../../tools/iwp` — then
+ * dangles at the new location, because `<stateRoot>/<member>/agents/<agent>/../../tools` resolves under
+ * the member home, where nothing exists. Given the ORIGINAL agent source dir, a symlink's path within it,
+ * and its (relative) target, return the ABSOLUTE target to repoint it at (resolved against the source),
+ * or `null` to leave it alone — an absolute link, or an in-tree link that still resolves after the copy.
+ */
+export function externalSymlinkAbsoluteTarget(
+  agentSrcDir: string,
+  symlinkRelPath: string,
+  linkTarget: string,
+): string | null {
+  if (path.isAbsolute(linkTarget)) return null;
+  const resolved = path.resolve(path.dirname(path.join(agentSrcDir, symlinkRelPath)), linkTarget);
+  const rel = path.relative(agentSrcDir, resolved);
+  // rel === '' → the agent dir itself; a sub-path (not starting with '..') → in-tree. Either way the link
+  // does not escape, so it still resolves after the copy — leave it. Only a '..'-escaping link is rewritten.
+  const insideAgentDir = rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return insideAgentDir ? null : resolved;
+}
 /** env keys the app may set on a session (everything else is dropped). */
 export const ENV_ALLOWLIST = new Set([
   'AOS_URL', 'SESSION', 'AGENT', 'TASK_B64', 'AOS_SECRET', 'CLAUDE_SESSION_ID',
@@ -351,6 +373,7 @@ export class LauncherDaemon {
     this.exec('mkdir', ['-p', work]);
     if (firstTime) {
       this.exec('cp', ['-a', `${src}/.`, `${work}/`]);
+      this.resolveExternalSymlinks(src, work);
     } else {
       if (fs.existsSync(path.join(src, 'CLAUDE.md'))) this.exec('cp', ['-a', path.join(src, 'CLAUDE.md'), `${work}/`]);
       const srcSkills = path.join(src, '.claude', 'skills');
@@ -363,6 +386,32 @@ export class LauncherDaemon {
     this.exec('chown', ['-R', `${uid}:${uid}`, work]);
     this.exec('chmod', ['700', work]);
     return work;
+  }
+
+  /**
+   * After a full copy, repoint every symlink that escapes the agent dir (e.g. the shared tool bundle,
+   * `iwp -> ../../tools/iwp`) to an ABSOLUTE target resolved against the ORIGINAL source — so `./iwp`,
+   * `./eng-repo`, `bash tools/…` keep resolving from the per-member working copy under `<stateRoot>/…`
+   * where the relative `../../tools` would otherwise dangle. In-tree relative symlinks are left as-is.
+   * (The member uid still needs read access to the shared bundle; this only fixes the path resolution.)
+   */
+  private resolveExternalSymlinks(src: string, work: string): void {
+    const walk = (dir: string): void => {
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const wpath = path.join(dir, e.name);
+        if (e.isSymbolicLink()) {
+          let target: string;
+          try { target = fs.readlinkSync(wpath); } catch { continue; }
+          const abs = externalSymlinkAbsoluteTarget(src, path.relative(work, wpath), target);
+          if (abs) this.exec('ln', ['-sfn', abs, wpath]);
+        } else if (e.isDirectory()) {
+          walk(wpath);
+        }
+      }
+    };
+    walk(work);
   }
 
   /** The member holder's live (dynamic) uid, via the injected resolver or systemd MainPID → /proc. */

@@ -1152,27 +1152,34 @@ export class TerminalManager {
     //   (a) DONE ORPHAN — it ended via `report`, which flips the row to 'done' before the Stop beacon lands, so
     //       markTurnIdle used to bail. Its pane must die regardless of idle time; a done run should hold no TUI.
     //       (markTurnIdle now reaps these directly; this sweep also clears any that predate the fix or whose
-    //       Stop beacon never landed.)
+    //       Stop beacon never landed.) Only detectable when we can poll liveness (see below).
     //   (b) IDLE STRAGGLER — still 'running' with a turn-end beacon seen (`last_activity` set) and idle past the
     //       timeout: the classic case where the Stop beacon was lost or a human attached then detached.
-    // Poll TRUE pane liveness once and only ever act on a pane that's ACTUALLY alive, so a cleanly-reaped row
-    // is never re-killed / re-audited on a later tick (a `done` row keeps its status forever once torn down).
+    // `aliveNames()` returns the live tmux set, or NULL when the backend can't report liveness (the Linux
+    // LauncherSessionBackend always; a transient local poll failure). When we CAN poll, gate on true pane
+    // liveness so a cleanly-reaped row is never re-killed / re-audited on a later tick (a `done` row keeps its
+    // status forever once torn down) — this is what lets us sweep 'done' orphans safely. When we CAN'T, fall
+    // back to the classic time-based rule for RUNNING rows only (never blind-sweep a 'done' row, or we'd
+    // re-teardown it every tick with no way to know its pane already died).
     const alive = this.backend.aliveNames();
-    if (alive) {
-      const unattended = this.db.prepare("SELECT id, tmux, run_as, spawned_by, agent, status, last_activity FROM term_sessions WHERE headless = 1 AND resident = 0 AND claimed_by IS NULL AND status IN ('running','done')")
-        .all<{ id: string; tmux: string; run_as: string | null; spawned_by: string | null; agent: string; status: string; last_activity: number | null }>();
-      for (const r of unattended) {
-        try {
-          if (!alive.has(r.tmux)) continue;                            // pane already gone — nothing to reap
+    const unattended = this.db.prepare("SELECT id, tmux, run_as, spawned_by, agent, status, last_activity FROM term_sessions WHERE headless = 1 AND resident = 0 AND claimed_by IS NULL AND status IN ('running','done')")
+      .all<{ id: string; tmux: string; run_as: string | null; spawned_by: string | null; agent: string; status: string; last_activity: number | null }>();
+    for (const r of unattended) {
+      try {
+        if (alive) {
+          if (!alive.has(r.tmux)) continue;                          // pane already gone — nothing to reap
           // a 'running' straggler is only idle-reaped once it has seen a turn-end beacon AND gone quiet past the
           // cutoff; a 'done' orphan is reaped on sight — it should never still be holding an interactive pane.
           if (r.status === 'running' && (r.last_activity == null || r.last_activity >= cutoff)) continue;
-          const space = this.spaceFor(r.run_as ?? r.spawned_by);
-          if (this.backend.hasClient(space, r.tmux) === true) continue; // a human is still watching — leave it
-          if (this.hasPendingHumanBlock(r.id)) continue;               // blocked on an answer/approval — keep alive
-          this.teardownUnattended(r.id, space, r.tmux, r.status === 'done' ? 'done-orphan' : 'idle-backstop');
-        } catch { /* one bad row must not stop the sweep */ }
-      }
+        } else {
+          // no liveness signal: classic straggler rule, running-only, so we can't re-sweep a done row blind.
+          if (r.status !== 'running' || r.last_activity == null || r.last_activity >= cutoff) continue;
+        }
+        const space = this.spaceFor(r.run_as ?? r.spawned_by);
+        if (this.backend.hasClient(space, r.tmux) === true) continue; // a human is still watching — leave it
+        if (this.hasPendingHumanBlock(r.id)) continue;               // blocked on an answer/approval — keep alive
+        this.teardownUnattended(r.id, space, r.tmux, r.status === 'done' ? 'done-orphan' : 'idle-backstop');
+      } catch { /* one bad row must not stop the sweep */ }
     }
   }
 

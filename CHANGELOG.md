@@ -8,7 +8,7 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
-## [0.156.0] — 2026-07-13
+## [0.157.0] — 2026-07-13
 ### Added
 - **Connect GitHub from your profile.** The per-member GitHub connection (the `GithubMineCard` — Connect/
   Disconnect + live install status) now also appears on the **Profile** page, in a **My git identity**
@@ -19,6 +19,26 @@ new version heading in the same commit.
   that the callback restores, open-redirect-guarded to safe in-app routes. (`web/src/App.tsx`,
   `web/src/connectors.tsx` — `GithubMineCard` exported, `src/server.ts` — return-path in the OAuth state;
   `scripts/github-per-member-test.cjs` now 73/73.)
+
+## [0.156.0] — 2026-07-13
+### Fixed
+- **`image_generate`/`image_edit` no longer fail ~1-in-3 on a transient hiccup — and the error names the
+  right subsystem.** Three defects in the image path (`src/edge/image-gen.ts`, `src/memory/memory-mcp.ts`):
+  - **Timeouts.** Every vendor `fetch` now has an explicit `AbortSignal.timeout` — 30s submit, 15s per
+    poll, 60s image download — so a hung socket can't hang the tool.
+  - **Retry on transient failures.** Submit + download retry up to 3× with exponential backoff + jitter on
+    a network error/timeout, **429**, or **5xx**; a single poll that blips is tolerated until the render
+    deadline. **Not** retried (a real answer): any 4xx / content-policy rejection or an explicit vendor
+    `failed` status. Retryability lives in one place (`VendorError.retryable`), and the existing
+    model-fallback path keys off the same signal, so a bad model still falls back instead of blind-retrying.
+  - **Correct error attribution.** A network failure during image generation used to report itself as
+    `memory error: fetch failed` (wrong subsystem). The tool wrapper now names the actual tool
+    (`image_generate error: …`) and appends the **vendor** + whether the failure is **transient**, so the
+    agent retries the retryable ones and fixes input on the rest instead of guessing.
+  - The 90s render timeout is now actionable — it says how long it waited and that the prediction may still
+    be in flight (check the Library before regenerating), not a bare "timed out".
+  See `docs/agent-mcp-tools.md` → "Media tool resilience". Verified live (normal gen, transient-retry with
+  correct `retryable`/`vendor`, and the model-fallback path all pass).
 
 ## [0.155.0] — 2026-07-13
 ### Changed

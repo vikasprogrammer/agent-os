@@ -23,6 +23,30 @@ new version heading in the same commit.
   `github.app.created`. (`src/connectors/github.ts` `convertAppManifest`, `src/edge/github-identity.ts`,
   `src/governance/settings.ts`, `src/server.ts`, `web/src/App.tsx`, `web/src/lib/api.ts`;
   `scripts/github-per-member-test.cjs` now 48/48.)
+### Changed
+- **Background (headless) runs no longer auto-open a terminal tab.** A headless session runs to
+  completion unattended — it isn't something you sit and watch — so it no longer auto-pops into the
+  terminal tab strip while you're viewing another session. It still appears in the sessions list and
+  can be opened explicitly (or taken over), either of which pins its tab. Interactive runs are
+  unchanged. Also adds a small **bg marker** (a `Cpu` glyph) beside headless sessions in the sidebar
+  Sessions list so background runs are distinguishable at a glance. Console-only, no API change.
+
+## [0.128.4] — 2026-07-13
+### Changed
+- **Settings → Integrations: one "Media generation" card for image + video.** The two separate cards
+  (each re-explaining the shared Atlas Cloud key, the video one awkwardly pointing back to "the Image
+  section above") are merged into a single card: the **Atlas Cloud key** sits at the top since one key
+  powers both, then an **Images** subsection (default image model) and a **Video** subsection (default
+  video model + the optional fal.ai wider-catalog key) hang off it. Status now reads as two chips
+  (`image · on`, `video · Atlas`/`fal.ai`). Also fixes a JSX whitespace bug that rendered
+  "Library​with" (missing space) in the old video blurb. Console copy/layout only — no API or schema change.
+### Changed
+- **Docs say "Library" (not "Artifacts").** Finishes the Artifacts→Library rename (v0.122.0, v0.128.2) by
+  updating the prose that lagged: the in-console **Docs** pages (core-concepts, getting-started,
+  shared-planes, working-with-agents, automations) now call the deliverables surface the **Library**, and
+  the engineering docs (`docs/PILLARS.md` §14 + `docs/agent-mcp-tools.md`) note that "Library" is the
+  user-facing name while `artifact*` (the `ArtifactStore`, `artifacts` table, `/api/artifacts` route, and
+  `artifact` inbox card) stays the internal identifier. Copy only — no code or schema change.
 
 ## [0.128.2] — 2026-07-13
 ### Changed

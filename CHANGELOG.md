@@ -8,7 +8,7 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
-## [0.138.1] — 2026-07-13
+## [0.138.2] — 2026-07-13
 ### Added
 - **Docs: three new end-user Docs pages covering recently shipped surfaces.** The console **Docs**
   section lagged the last ~20 releases — whole feature areas (media generation, Goals, per-member
@@ -24,6 +24,14 @@ new version heading in the same commit.
     owner-once GitHub-App setup step.
   Wired into `web/src/docs/index.ts` between Automations→Shared-planes→Governance. Docs-only web copy;
   no API or schema change.
+
+## [0.138.1] — 2026-07-13
+### Fixed
+- **The Profile page now loads instead of bouncing to the Inbox.** `profile` was added to the `Route`
+  type but not to the runtime `ROUTES` allow-list the hash router validates against, so navigating to
+  `#/profile` fell through to the unknown-route fallback (`inbox`). Added `profile` to `ROUTES`. (`web/src/App.tsx`.)
+
+## [0.138.0] — 2026-07-13
 ### Added
 - **`image_edit`: agents can now edit or upscale an existing image, not just generate from scratch.** A new
   governed MCP tool takes a source **`image`** (a Library artifact id, a working-folder file path — written

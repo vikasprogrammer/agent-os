@@ -8,7 +8,7 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
-## [0.127.0] — 2026-07-13
+## [0.128.0] — 2026-07-13
 ### Added
 - **Per-member GitHub — git that runs as the actual human (Phase 2 of `docs/github-integration-plan.md`).**
   A member links their **own** GitHub account once in the browser, and thereafter any session that runs
@@ -24,6 +24,25 @@ new version heading in the same commit.
   stays the fallback when the human hasn't connected); expiring tokens are refreshed on demand. New routes
   `GET /api/github/{connect,callback,me}` + `POST /api/github/disconnect`, audited
   `github.user.connected` / `github.token.injected`. Offline+HTTP test: `scripts/github-per-member-test.cjs`.
+
+## [0.127.0] — 2026-07-13
+### Changed
+- **Atlas Cloud is now the primary media backend — one interface for image AND video.** When an Atlas
+  key is set it's used for image generation ahead of OpenRouter (fal still leads for video), so a single
+  Atlas key powers both. (`resolveImageBackend`, `SettingsStore.imageGenBackend`)
+### Fixed
+- **Atlas image generation now works.** The adapter used a wrong OpenAI-style `/v1/images/generations`
+  endpoint; Atlas actually uses a custom **async** API — `POST /api/v1/model/generateImage` → a
+  prediction id → poll `GET /api/v1/model/prediction/{id}` until `data.status` is completed, image URL at
+  `data.outputs[0]`. Rewrote the adapter to submit + poll-to-completion (bounded; image renders in
+  seconds) and download the result. Default model is a real id (`google/nano-banana-2/text-to-image`);
+  validated live end-to-end. (`src/edge/image-gen.ts`)
+- **Atlas video no longer hangs on a failed/finished render.** The poll read a top-level `status`, but
+  Atlas nests the prediction under **`data`** (`data.status`/`data.error`/`data.outputs`) — so a `failed`
+  render (e.g. a content-policy block) was mis-read as still `rendering` until it timed out, and a
+  completed one wasn't detected. Now reads the nested object, treats failed/error/cancelled as terminal
+  (surfacing Atlas's message), and takes the video URL from `data.outputs[0]` directly. Atlas errors are
+  carried in a `msg` field, now parsed. (`src/edge/video-gen.ts`)
 
 ## [0.126.0] — 2026-07-13
 ### Added

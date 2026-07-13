@@ -8,7 +8,7 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
-## [0.126.0] — 2026-07-13
+## [0.127.0] — 2026-07-13
 ### Added
 - **Per-member GitHub — git that runs as the actual human (Phase 2 of `docs/github-integration-plan.md`).**
   A member links their **own** GitHub account once in the browser, and thereafter any session that runs
@@ -24,6 +24,24 @@ new version heading in the same commit.
   stays the fallback when the human hasn't connected); expiring tokens are refreshed on demand. New routes
   `GET /api/github/{connect,callback,me}` + `POST /api/github/disconnect`, audited
   `github.user.connected` / `github.token.injected`. Offline+HTTP test: `scripts/github-per-member-test.cjs`.
+
+## [0.126.0] — 2026-07-13
+### Added
+- **Video generation — agents can now produce video.** New `video_generate` MCP tool: an agent gives a
+  prompt (optionally an image URL to animate), and the finished clip lands in the **Artifacts** gallery
+  (`kind:'video'`, folder `generated-videos`) with an owner inbox card — cost-metered + audited, exactly
+  like images. Because video renders **asynchronously** (minutes), it uses a durable **job model**: the
+  vendor job is persisted to a new `video_jobs` table, a brief in-call poll catches fast renders, and a
+  **background poller on the Automations tick** (`TerminalManager.pollVideoJobs`) finishes the rest —
+  surviving the poll cap AND a server restart. On completion the mp4 is downloaded and ingested. Governed
+  as capability `video.generate` with the estimated `amountUsd` (per-second × duration), so the money-cap
+  rule applies. Backend behind a swappable `VideoBackend` (`src/edge/video-gen.ts`): **fal.ai** (default —
+  the verified queue contract + the widest catalog: Veo, Kling, Seedance…) or **Atlas Cloud** (the shared
+  image key). **OpenRouter doesn't do video**, so a fal.ai/Atlas key is required (Settings → Integrations →
+  Video; `VIDEO_GEN=1` exposes the tool). The gallery already previews video, so no new UI there.
+  (`src/edge/video-gen.ts`, `src/state/video-jobs.ts`, `src/state/db.ts`, `src/kernel.ts`,
+  `src/terminal.ts`, `src/edge/automations.ts`, `src/server.ts`, `src/governance/settings.ts`,
+  `src/memory/memory-mcp.ts`, `web/src/App.tsx`, `web/src/lib/api.ts`)
 
 ## [0.125.0] — 2026-07-13
 ### Added

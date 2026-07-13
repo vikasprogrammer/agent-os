@@ -8,7 +8,7 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
-## [0.130.0] — 2026-07-13
+## [0.131.0] — 2026-07-13
 ### Added
 - **Plain `git` now authenticates with the injected token, not just `gh`.** The GitHub token is exported
   as `GH_TOKEN`/`GITHUB_TOKEN` (which `gh` reads natively), but `git push`/`clone` over HTTPS doesn't use
@@ -28,6 +28,17 @@ new version heading in the same commit.
   injected and just works, and a pure automation (no run-as person) gets no personal steer. Contextual, so
   it only reaches a human when git is actually relevant. (`TerminalManager.buildCompanyMd`;
   `scripts/github-per-member-test.cjs` now 53/53.)
+
+## [0.130.0] — 2026-07-13
+### Added
+- **Default-model pickers are now live dropdowns (Settings → Integrations → Media generation).** The image
+  and video "Default model" fields became comboboxes backed by the **live Atlas catalog** — a new
+  admin-only `GET /api/integrations/atlas/models` fetches `GET /api/v1/models` with the stored key, filters
+  to `TEXT-TO-IMAGE` (~47) and `TEXT-TO-VIDEO` (~47) models, and caches per-key for 5 min. The console
+  renders them as native `<datalist>` suggestions on the model inputs, so you can **pick from the current
+  catalog or still type any id** (free text preserved). The list refreshes when the Atlas key changes; a
+  fetch failure or missing key falls back to a plain free-text field. Agents can still override the model
+  per call — this only sets the fleet default.
 
 ## [0.129.0] — 2026-07-13
 ### Added

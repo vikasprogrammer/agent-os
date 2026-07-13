@@ -8,7 +8,7 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
-## [0.138.2] — 2026-07-13
+## [0.138.3] — 2026-07-13
 ### Added
 - **Docs: three new end-user Docs pages covering recently shipped surfaces.** The console **Docs**
   section lagged the last ~20 releases — whole feature areas (media generation, Goals, per-member
@@ -24,6 +24,20 @@ new version heading in the same commit.
     owner-once GitHub-App setup step.
   Wired into `web/src/docs/index.ts` between Automations→Shared-planes→Governance. Docs-only web copy;
   no API or schema change.
+
+## [0.138.2] — 2026-07-13
+### Fixed
+- **Taking over an unattended session no longer breaks file attach with "session is not live."** Take-over
+  (`claimSession`, `POST /api/sessions/:id/interactive`) flipped `headless→0`, set `claimed_by`, and cleared
+  the resume sentinel — but, unlike the resume path (`markResumed`), it never set `status = 'running'`. A
+  take-over can race the Stop-hook turn-end teardown, which may have already moved the run to `done`; the
+  claimed-and-attached run then kept a terminal status, so everything gated on `status === 'running'` —
+  notably `attachFile` — rejected the now-live, steerable session as "not live." Take-over now forces
+  `status = 'running'` (the pane resurrects on re-open via the already-cleared sentinel), matching resume.
+  The console's 📎 attach/drag/paste gate also now keys off the pane being **attached/live** (the same
+  `isLive` rule the green dot uses, plus the just-took-over override) instead of raw `status`, so it stops
+  lagging a poll behind a take-over; the server stays the hard authority.
+  (`TerminalManager.claimSession`, `ImageDropZone` in `web/src/App.tsx`.)
 
 ## [0.138.1] — 2026-07-13
 ### Fixed

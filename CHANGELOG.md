@@ -21,6 +21,25 @@ new version heading in the same commit.
   (`userInstallationStatus` in `src/connectors/github.ts`, `src/server.ts`, `web/src/connectors.tsx`,
   `web/src/lib/api.ts`; `scripts/github-per-member-test.cjs` now 59/59.)
 
+## [0.150.2] — 2026-07-13
+### Fixed
+- **A goal's Target field couldn't be edited** from the goal-detail dialog. The inline `<Input>`'s
+  `onChange` optimistically wrote each keystroke into `detail.goal.target` — the same value its `onBlur`
+  save-guard (`v !== detail.goal.target`) compared against — so the guard was always false and the PATCH
+  never fired. Made the input uncontrolled (`defaultValue` keyed to the goal id, dropping the
+  self-defeating `onChange`) so blur compares the typed value against the unchanged server value and saves.
+
+## [0.150.1] — 2026-07-13
+### Changed
+- **The "Learnings" nav is renamed "Dreaming"**, matching the established vocabulary (Pillar 10 is
+  "Dreaming / Self-learning"; the engine is the *Dreamer*, the action is *Reflect*). "Learnings" was a
+  one-off coinage. Route `#/learnings` → `#/dreaming` (safe — it only shipped in 0.150.0), icon 💡→🌙
+  (`Moon`), and the page gains a one-line intro framing it as the *Distil · Apply* half of the four-verb
+  memory loop (`memory-model.md`). Docs realigned to the new top-level location: `PILLARS.md` §9/§10 +
+  the Self-learning toggle note, `self-learning-plan.md`, `daily-digest-plan.md`, `procedural-skills-plan.md`
+  no longer point at the old "Memory hub → Self-learning tab" / "Settings → Self-learning".
+
+
 ## [0.150.0] — 2026-07-13
 ### Changed
 - **"Learnings" is now its own top-level nav.** The self-learning surface — reflect cadence, distilled

@@ -85,6 +85,16 @@ by the PreToolUse Bash gate-hook exactly as before — this only changes *which 
 `state` is a random token held in a short-lived in-process map keyed to `{ tenant, memberId, exp }`;
 the callback additionally requires `state.memberId === me.id` (defence-in-depth against a leaked state).
 
+## Nudging an unconnected member (v0.130.0)
+
+The feature is otherwise passive — an unconnected member's session just falls back to the bot token. To
+close that discovery gap, `buildCompanyMd` adds a **git-identity steer** to the launch context when the
+run-as member hasn't linked GitHub: if the App is configured it points the agent to have them **Connect
+GitHub** in one click; if the App isn't set up it asks an owner/admin to create it first. The agent
+raises it via `ask` only when the task actually touches git, so it's contextual rather than a blanket
+ping. No steer when the member is connected (token injected, just works) or when there's no run-as person
+(a pure automation). Covered by `scripts/github-per-member-test.cjs` §6.
+
 ## Identity note
 
 v1 records the GitHub `login` as the member's `github` external-id. Logins can change; a stable numeric

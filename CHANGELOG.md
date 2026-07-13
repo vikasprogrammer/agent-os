@@ -8,6 +8,19 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
+## [0.130.0] — 2026-07-13
+### Added
+- **Sessions now nudge an unconnected member to link their GitHub.** When a session runs **as** someone
+  who hasn't linked their own GitHub account, the launch context tells the agent so — so if the task
+  involves pushing code or opening a PR, the agent `ask`s the right person to fix it instead of silently
+  committing as the shared bot (or failing auth). Two cases, two messages: if the workspace **GitHub App is
+  configured**, it points them at the **1-click Connect GitHub** (Connections → Connected → Mine); if **no
+  App is set up**, it asks an **owner/admin** to create one first (Connections → Creds → GitHub → Create
+  GitHub App). Fires only when acting as a real member who isn't connected — a connected member's token is
+  injected and just works, and a pure automation (no run-as person) gets no personal steer. Contextual, so
+  it only reaches a human when git is actually relevant. (`TerminalManager.buildCompanyMd`;
+  `scripts/github-per-member-test.cjs` now 53/53.)
+
 ## [0.129.0] — 2026-07-13
 ### Added
 - **One-click GitHub App setup — no more manual walkthrough.** The **Connections → Creds → GitHub** card

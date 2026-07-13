@@ -944,7 +944,7 @@ export class TerminalManager {
     const env = this.sessionEnv(o.id, o.agent, o.task, o.secret);
     // Build the per-session connector + company payloads once (Composio is minted here).
     const mcpJson = this.buildMcpConfigJson(o.id, o.agent, o.actingMember, o.secret, o.hasSlack, o.hasDiscord);
-    const companyMd = this.buildCompanyMd(o.agent);
+    const companyMd = this.buildCompanyMd(o.agent, o.actingMember);
     this.materializeSkills(o.id, o.agent, manifest.dir);
     // Unattended (automation/cron/task) runs are now an attachable interactive TUI, not `claude -p` — so a
     // human can take one over mid-run by simply attaching (no kill, no resume). The launcher's UNATTENDED
@@ -1288,7 +1288,7 @@ export class TerminalManager {
    *  We tack on OS-owned operating notes after the user's content. The terminal here is a browser
    *  xterm (over ttyd) running the TUI on the alternate screen with mouse reporting on, so embedded
    *  terminal hyperlinks (OSC 8) aren't clickable — the agent must surface raw URLs as plain text. */
-  private buildCompanyMd(selfAgent?: string): string {
+  private buildCompanyMd(selfAgent?: string, actingMember?: string): string {
     const company = this.os.settings.company().companyMd.trim();
     // Close the self-learning loop: the Dreamer's distilled guidance rides in every agent's prompt, so
     // the fleet's accumulated experience shapes each new session. Toggleable in Settings → Self-learning.
@@ -1353,6 +1353,29 @@ export class TerminalManager {
         'a Composio action only if no native tool covers what you need.\n\n' +
         chatLines.join('\n')
       : '';
+    // Per-member git steer: when this run acts AS a person who hasn't linked their own GitHub, tell the
+    // agent how to fix git attribution — so a session that needs to push/PR points the human at the
+    // 1-click connect (or at an owner/admin, if the workspace App isn't set up yet) instead of silently
+    // committing as a shared bot (or failing auth). Only when acting as a real member, and only the
+    // actionable case (not connected) — a connected member's token is injected and just works.
+    let github = '';
+    if (actingMember) {
+      const gh = new GithubIdentity(this.os);
+      if (!gh.load(actingMember)) {
+        const who = this.os.team.getMember(actingMember)?.name || 'the person you run as';
+        github = gh.configured()
+          ? '# Git identity — you are not yet acting as a person on GitHub\n\n' +
+            `You are running as **${who}**, who hasn't linked their GitHub account — so any \`git push\` or ` +
+            'pull request would be authored by the shared workspace app, not them. If this task involves ' +
+            'committing code or opening a PR, use `ask` to tell them to connect their GitHub in one click: ' +
+            '**Connections → Connected → Mine → Connect GitHub**. Once they do, commits land under their own name.'
+          : '# Git identity — GitHub is not set up for this workspace\n\n' +
+            "No company GitHub App is configured, so `git`/`gh` can't act as a specific person (a push would " +
+            'use the shared bot token if one exists, else fail to authenticate). If this task needs to push ' +
+            'code or open a PR, use `ask` to have an owner or admin set up the GitHub App in one click ' +
+            `(**Connections → Creds → GitHub → Create GitHub App**), then ask **${who}** to connect their account.`;
+      }
+    }
     // Launch-time recall preamble (Settings → Memory, off by default): seed the prompt with this
     // agent's most salient memories so a cold session isn't blind, instead of relying on it to call
     // `recall`. Reads the local `memories` ledger directly (node:sqlite is synchronous) — the same
@@ -1398,7 +1421,7 @@ export class TerminalManager {
             .join('\n');
       }
     }
-    return [company, AGENT_OS_OPERATING_NOTES, messaging, goalsSection, fleet, team, preamble, learned]
+    return [company, AGENT_OS_OPERATING_NOTES, messaging, github, goalsSection, fleet, team, preamble, learned]
       .filter(Boolean)
       .join('\n\n');
   }

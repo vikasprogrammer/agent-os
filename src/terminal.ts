@@ -976,6 +976,10 @@ export class TerminalManager {
     // Per-member git: if THIS run's run-as human has linked their own GitHub account, their token
     // OVERRIDES the agent bot's GH_TOKEN — so git push / gh pr are authored as the actual person.
     this.injectMemberGithub(env, o.agent, o.actingMember, o.id);
+    // Whatever set GH_TOKEN above (member token or agent bot), teach plain `git` to use it too — `gh`
+    // reads GH_TOKEN natively but `git push` over HTTPS does not, so without this only half the toolchain
+    // authenticates. A github.com-scoped credential helper closes that gap.
+    this.configureGitCredentials(env);
     // Phase 2c: granted Host connections' SSH keys → a session ssh_config + ssh/scp PATH shim, so the
     // agent's plain `ssh` authenticates to a host without ever handling the key. (Local-lane only.)
     this.injectHostCredentials(env, o.agent, o.actingMember, o.id);
@@ -2828,6 +2832,25 @@ export class TerminalManager {
       this.audit(sessionId, agent, 'github.token.stale', { login: blob.login, principal: actingMember });
       void gh.ensureFresh(actingMember).catch(() => { /* best-effort; next launch retries */ });
     }
+  }
+
+  /**
+   * Make plain `git` authenticate with the injected `GH_TOKEN` too — not just `gh`. `gh` reads
+   * `GH_TOKEN`/`GITHUB_TOKEN` from the env natively, but `git push`/`clone` over HTTPS does not, so
+   * without a credential helper only half the toolchain would work. We install a **github.com-scoped**
+   * helper entirely via `GIT_CONFIG_*` env vars (git ≥2.31) — no file writes, session-scoped, and it
+   * reads `$GH_TOKEN` at call time so a rotated token still works. The empty helper (index 0) first
+   * RESETS any inherited system/global helper for that host so ours is the only one consulted; the
+   * username `x-access-token` is what GitHub expects for App/user tokens. No-op when no token was set
+   * (nothing to authenticate with) or for non-github.com remotes (SSH hosts keep their own keys).
+   */
+  private configureGitCredentials(env: Record<string, string>): void {
+    if (!env.GH_TOKEN) return;
+    env.GIT_CONFIG_COUNT = '2';
+    env.GIT_CONFIG_KEY_0 = 'credential.https://github.com.helper';
+    env.GIT_CONFIG_VALUE_0 = '';
+    env.GIT_CONFIG_KEY_1 = 'credential.https://github.com.helper';
+    env.GIT_CONFIG_VALUE_1 = '!f() { test "$1" = get && printf "username=x-access-token\\npassword=%s\\n" "$GH_TOKEN"; }; f';
   }
 
   /** Find the real `ssh`/`scp` on the PARENT PATH (which never includes a session shim dir), so the

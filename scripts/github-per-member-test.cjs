@@ -248,6 +248,17 @@ async function main() {
   assert(!/Git identity/.test(md), 'no run-as member → no git-identity steer');
   gid.clear(ownerId);
 
+  // ─── 7) git credential helper (plain `git`, not just `gh`) ──────────────────
+  console.log('\n\x1b[1m7) git credential helper (git + gh both authenticate)\x1b[0m');
+  const genv = { GH_TOKEN: 'gho_abc' };
+  tm.configureGitCredentials(genv);
+  assert(genv.GIT_CONFIG_COUNT === '2', 'sets GIT_CONFIG_COUNT for two entries');
+  assert(genv.GIT_CONFIG_KEY_0 === 'credential.https://github.com.helper' && genv.GIT_CONFIG_VALUE_0 === '', 'entry 0 resets any inherited github.com helper');
+  assert(genv.GIT_CONFIG_KEY_1 === 'credential.https://github.com.helper' && /username=x-access-token/.test(genv.GIT_CONFIG_VALUE_1) && /\$GH_TOKEN/.test(genv.GIT_CONFIG_VALUE_1), 'entry 1 is a github.com helper that echoes x-access-token + $GH_TOKEN');
+  const noTok = {};
+  tm.configureGitCredentials(noTok);
+  assert(noTok.GIT_CONFIG_COUNT === undefined, 'no GH_TOKEN → no git credential config (nothing to authenticate with)');
+
   server.close();
   registry.forEach && registry.forEach((x) => { try { x.tm.shutdown && x.tm.shutdown(); } catch { /* */ } });
 

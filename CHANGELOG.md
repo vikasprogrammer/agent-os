@@ -10,6 +10,14 @@ new version heading in the same commit.
 
 ## [0.130.0] — 2026-07-13
 ### Added
+- **Plain `git` now authenticates with the injected token, not just `gh`.** The GitHub token is exported
+  as `GH_TOKEN`/`GITHUB_TOKEN` (which `gh` reads natively), but `git push`/`clone` over HTTPS doesn't use
+  those on its own — so previously only half the toolchain was authenticated. Launch now also installs a
+  **github.com-scoped git credential helper** via `GIT_CONFIG_*` env vars (no file writes, session-scoped,
+  reads `$GH_TOKEN` at call time so a rotated token still works; resets any inherited helper first, uses the
+  `x-access-token` username GitHub expects). So a session that has a token — a member's own or the agent
+  bot's — can `git push` **and** `gh pr create` transparently. No-op when no token is present or for non-
+  github.com/SSH remotes. (`TerminalManager.configureGitCredentials`; verified against real `git`.)
 - **Sessions now nudge an unconnected member to link their GitHub.** When a session runs **as** someone
   who hasn't linked their own GitHub account, the launch context tells the agent so — so if the task
   involves pushing code or opening a PR, the agent `ask`s the right person to fix it instead of silently

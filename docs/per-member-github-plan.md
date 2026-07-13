@@ -64,6 +64,13 @@ company-bot `GH_TOKEN` when an agent opts in via `shellSecrets`), we call **`inj
 Precedence is deliberate and documented inline: **member token > agent bot token**. Both remain governed
 by the PreToolUse Bash gate-hook exactly as before — this only changes *which identity* the shell holds.
 
+**Both `git` and `gh` (v0.130.0).** `gh` reads `GH_TOKEN`/`GITHUB_TOKEN` natively, but plain `git push`
+over HTTPS does not — so `configureGitCredentials` also installs a **github.com-scoped git credential
+helper** via `GIT_CONFIG_*` env vars (git ≥2.31; no file writes; reads `$GH_TOKEN` at call time). It
+resets any inherited helper first and returns the `x-access-token` username GitHub expects. Runs whenever
+a token was injected (member or bot), so the whole toolchain authenticates; no-op otherwise and for
+non-github.com/SSH remotes.
+
 ## Token lifecycle
 
 - **Store:** vault, `principal = member id`, key `github_user`, JSON blob (encrypted).

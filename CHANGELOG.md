@@ -8,6 +8,14 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
+## [0.262.2] — 2026-07-24
+### Changed
+- **ClickUp: 👀 reaction instead of an "on it" comment.** When a `/agentname` comment is picked up, the
+  ingress now reacts 👀 (`eyes`) on the triggering comment as the "read / processing" signal, and no
+  longer posts a "🤖 On it…" ack comment (noise) — the reaction + the agent's eventual `clickup_reply`
+  are enough. (Routing help / disambiguation still posts a comment, since it carries text.) New
+  `addReaction()` connector fn (ClickUp reactions take an emoji SHORTCODE array, e.g. `{reactions:["eyes"]}`).
+
 ## [0.262.1] — 2026-07-24
 ### Fixed
 - **ClickUp loop-guard broke personal API tokens (agents ignored your own comments).** The guard skipped

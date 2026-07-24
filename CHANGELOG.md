@@ -8,6 +8,16 @@ new version heading in the same commit.
 
 ## [Unreleased]
 
+## [0.263.3] — 2026-07-24
+### Added
+- **Per-agent `chatReachable` flag — control which agents the open chat router can reach.** By default any
+  claude-code agent is addressable via `/agent-os <id>` / `/<id>` on Slack, Discord, or a ClickUp task
+  comment. A new **Reachable from chat** toggle (Agent → config, owner/admin) sets `chatReachable:false` to
+  keep an agent OFF that open front door — excluded from `routeChat` + the help list, so a comment can't
+  invoke it; a `/<id>` for it replies "isn't reachable from chat". It stays runnable from the console,
+  tasks, delegation, and explicitly-configured automations. Use for supervisor/ops personas (e.g. a `ceo`
+  triage agent) you don't want spawned from a shared thread.
+
 ## [0.263.2] — 2026-07-24
 ### Added
 - **`/agent-os <agent>` namespace prefix for the chat router.** `/agent-os engineer fix X` (or `/agentos …`)

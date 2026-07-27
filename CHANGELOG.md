@@ -7,6 +7,8 @@ Every PR that bumps `package.json` moves its entries from **Unreleased** into a
 new version heading in the same commit.
 
 ## [Unreleased]
+
+## [0.271.0] — 2026-07-27
 ### Added
 - **Agent-driven Composio connection requests — default to personal (`connection_request`).** An agent
   that needs a Composio app it isn't connected to can now ask for it through the governed spine (the

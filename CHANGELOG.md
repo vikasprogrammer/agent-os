@@ -16,7 +16,7 @@ new version heading in the same commit.
   runner expands it per platform. The guard itself was never wrong — verified on a Linux host that
   `$HOME/.ssh/authorized_keys` and `$HOME/.codex/auth.json` are denied.
 
-## [0.281.0] — 2026-07-31
+## [0.282.0] — 2026-07-31
 ### Added
 - **Codex sessions are attachable, and support warm resident chat.** Every lane is now the interactive
   TUI, matching the Claude lane: an unattended run can be taken over mid-run by simply attaching (no
